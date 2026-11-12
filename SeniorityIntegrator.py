@@ -1,7 +1,7 @@
 # ======================================================================
 # Pilot Seniority Integration Tool  (run with:  streamlit run SeniorityIntegrator.py)
 # Sections: 1 setup/constants | 2 sample data | 3 parsing & counting | 4 analysis (Create_ functions)
-#           5 report helpers & charts | 6 export (CSV/PDF) | 7 report page | 8 main page
+#           5 report helpers & charts | 6 export (CSV/PDF) | 7 future lists, report pages | 8 main page
 # ======================================================================
 import base64  # encode/decode binary data (downloads and the embedded sample files)
 import colorsys  # convert colours between RGB and HLS when shading
@@ -122,7 +122,7 @@ COLOR_CHOICES = {  # the 12 basic colours offered for each airline
 
 DEFAULT_AIRLINE_NAMES = {1: "Air Superior", 2: "Thunder Air"}  # names pre-filled when the program loads
 DEFAULT_COLOR_NAMES = {1: "Red", 2: "Blue"}  # colours pre-selected when the program loads
-DEFAULT_RETIREMENT_AGE = "65"  # pre-filled Normal Retirement Age (not used in calculations yet)
+DEFAULT_RETIREMENT_AGE = "65"  # pre-filled Normal Retirement Age (used for the retirement charts and the future lists)
 
 CONTACT_EMAIL = "francishane@gmail.com"  # licence / support contact address
 CONTACT_SITE = "airlinepilotmerger.com"  # product website
@@ -144,7 +144,7 @@ One row per pilot, **in seniority order** (the most senior pilot first). The fir
 | SenNum | positive whole number (the pilot's number on the list, unique) | 1 |
 | LastName | text | Smith |
 | FirstName | text | Patrick |
-| Airline | 3-letter code (the same for every row; different for each airline) | SUP |
+| Airline | 3-letter code (normally the same on every row; different for each airline. A file for an airline that has already merged may contain several codes) | SUP |
 | Rank | 2 letters: CA, FO or RP | CA |
 | Equip | 4 characters | B737 |
 | DOH | date of hire, **YYYY-MM-DD** | 2005-03-14 |
@@ -350,8 +350,8 @@ def parse_seniority_list(uploaded_file):  # reads a seniority CSV and returns it
     df["DOB"] = pd.to_datetime(df["DOB"])  # date of birth as a real date
     df["DaysInactive"] = df["DaysInactive"].astype(int)  # whole days
 
-    if df["Airline"].nunique() != 1:  # every row must carry the same airline code
-        raise ValueError("The Airline column must contain the same code on every row.")  # reject mixed codes
+    if (df["Airline"] == "").any() or (df["Airline"].str.lower() == "nan").any():  # every row needs an airline code
+        raise ValueError("Every row needs an Airline code.")  # reject blanks
     if df["SenNum"].duplicated().any():  # two pilots with the same list number
         raise ValueError("SenNum values must be unique within a seniority list.")  # reject duplicates
 
@@ -461,7 +461,7 @@ def Create_ConstNoticeList(SenList1, SenList2, constructive_notice_date):  # pil
 
 
 def Create_LongList(SenList1, SenList2, ConstNotice1, ConstNotice2, exclude_inactive):  # the longevity list
-    long_columns = ["NameID", "Airline", "DaysHired", "DaysActive"]  # columns kept
+    long_columns = ["NameID", "ListNum", "DaysHired", "DaysActive"]  # columns kept
 
     Long1 = (  # airline 1 without constructive-notice pilots
         SenList1.loc[~SenList1["NameID"].isin(ConstNotice1["NameID"]), long_columns]  # drop notice pilots
@@ -484,7 +484,7 @@ def Create_LongList(SenList1, SenList2, ConstNotice1, ConstNotice2, exclude_inac
 
 
 def Create_Category_List(SenList1, SenList2, category_counts):  # the status-and-category list
-    columns = ["NameID", "Airline", "RelSen"]  # columns kept
+    columns = ["NameID", "ListNum", "RelSen"]  # columns kept
     offset1 = 0  # next unused row in airline 1's list
     offset2 = 0  # next unused row in airline 2's list
     cat_lists = []  # one list per category
@@ -493,13 +493,13 @@ def Create_Category_List(SenList1, SenList2, category_counts):  # the status-and
         count1 = category_counts.get(cat_num, {}).get("airline1", 0)  # pilots airline 1 puts in this category
         count2 = category_counts.get(cat_num, {}).get("airline2", 0)  # pilots airline 2 puts in this category
 
-        slice1 = SenList1.iloc[offset1:offset1 + count1][["NameID", "Airline"]].reset_index(drop=True)  # next block of airline 1
+        slice1 = SenList1.iloc[offset1:offset1 + count1][["NameID", "ListNum"]].reset_index(drop=True)  # next block of airline 1
         if count1 > 0:  # at least one pilot in this block
             slice1["RelSen"] = [(i + 1) / count1 for i in range(len(slice1))]  # position within the category / category size
         else:  # empty category
             slice1["RelSen"] = pd.Series(dtype=float)  # empty column
 
-        slice2 = SenList2.iloc[offset2:offset2 + count2][["NameID", "Airline"]].reset_index(drop=True)  # next block of airline 2
+        slice2 = SenList2.iloc[offset2:offset2 + count2][["NameID", "ListNum"]].reset_index(drop=True)  # next block of airline 2
         if count2 > 0:  # at least one pilot in this block
             slice2["RelSen"] = [(i + 1) / count2 for i in range(len(slice2))]  # position within the category / category size
         else:  # empty category
@@ -522,7 +522,7 @@ def Create_Category_List(SenList1, SenList2, category_counts):  # the status-and
 
 
 def Create_HybridList(LongList, CategoryList, LongevityWeight, CategoryWeight):  # blends the two lists
-    long_part = LongList[["SenNum", "NameID", "Airline"]].rename(columns={"SenNum": "SenNum_Long"})  # longevity position
+    long_part = LongList[["SenNum", "NameID", "ListNum"]].rename(columns={"SenNum": "SenNum_Long"})  # longevity position
     cat_part = CategoryList[["SenNum", "NameID"]].rename(columns={"SenNum": "SenNum_Category"})  # category position
 
     merged = pd.merge(long_part, cat_part, on="NameID", how="outer", indicator=True)  # match pilots by unique NameID
@@ -540,7 +540,7 @@ def Create_HybridList(LongList, CategoryList, LongevityWeight, CategoryWeight): 
     )  # end SenScore
 
     HybridList = (  # the blended list
-        merged[["NameID", "Airline", "SenScore"]]  # keep three columns
+        merged[["NameID", "ListNum", "SenScore"]]  # keep three columns
         .sort_values("SenScore", kind="mergesort")  # lowest score first (ties keep their order)
         .reset_index(drop=True)  # renumber rows from 0
     )  # end HybridList
@@ -549,29 +549,26 @@ def Create_HybridList(LongList, CategoryList, LongevityWeight, CategoryWeight): 
     return HybridList  # the blended list
 
 
-def Create_StovePipedList(HybridList, SenList1, SenList2):  # interleave by airline, keeping each airline's own order
-    airline1_code = SenList1["Airline"].iloc[0]  # airline 1's code
-    airline2_code = SenList2["Airline"].iloc[0]  # airline 2's code
-
-    names1 = SenList1["NameID"].tolist()  # airline 1's pilots in their original order
-    names2 = SenList2["NameID"].tolist()  # airline 2's pilots in their original order
-    idx1 = 0  # next unused airline 1 pilot
-    idx2 = 0  # next unused airline 2 pilot
+def Create_StovePipedList(HybridList, SenList1, SenList2):  # interleave by list, keeping each list's own order
+    names1 = SenList1["NameID"].tolist()  # list 1's pilots in their original order
+    names2 = SenList2["NameID"].tolist()  # list 2's pilots in their original order
+    idx1 = 0  # next unused list 1 pilot
+    idx2 = 0  # next unused list 2 pilot
 
     stovepiped_names = []  # NameIDs in their final positions
-    for airline in HybridList["Airline"]:  # walk down the hybrid list's airline pattern
-        if airline == airline1_code:  # this slot belongs to airline 1
-            if idx1 >= len(names1):  # no airline 1 pilots left
-                raise ValueError(f"Ran out of {airline1_code} pilots in SenList1 while building StovepipedList.")  # stop
-            stovepiped_names.append(names1[idx1])  # next airline 1 pilot in original order
+    for list_num in HybridList["ListNum"]:  # walk down the hybrid list's pattern (1 = first file, 2 = second file)
+        if list_num == 1:  # this slot belongs to list 1
+            if idx1 >= len(names1):  # no list 1 pilots left
+                raise ValueError("Ran out of pilots in SenList1 while building StovepipedList.")  # stop
+            stovepiped_names.append(names1[idx1])  # next list 1 pilot in original order
             idx1 += 1  # advance
-        elif airline == airline2_code:  # this slot belongs to airline 2
-            if idx2 >= len(names2):  # no airline 2 pilots left
-                raise ValueError(f"Ran out of {airline2_code} pilots in SenList2 while building StovepipedList.")  # stop
-            stovepiped_names.append(names2[idx2])  # next airline 2 pilot in original order
+        elif list_num == 2:  # this slot belongs to list 2
+            if idx2 >= len(names2):  # no list 2 pilots left
+                raise ValueError("Ran out of pilots in SenList2 while building StovepipedList.")  # stop
+            stovepiped_names.append(names2[idx2])  # next list 2 pilot in original order
             idx2 += 1  # advance
-        else:  # a code that is neither airline
-            raise ValueError(f"Unrecognized airline code '{airline}' in HybridList.")  # stop
+        else:  # neither list
+            raise ValueError(f"Unrecognized list number '{list_num}' in HybridList.")  # stop
 
     StovepipedList = HybridList.copy()  # start from the hybrid list
     StovepipedList["NameID"] = stovepiped_names  # swap in the stovepiped pilots
@@ -579,8 +576,8 @@ def Create_StovePipedList(HybridList, SenList1, SenList2):  # interleave by airl
 
 
 def Create_IPSL(StovepipedList, ConstNoticeList, SenList1, SenList2):  # the full Integrated Pilot Seniority List
-    lookup_columns = ["NameID", "LastName", "FirstName", "Airline", "Rank", "Equip", "DOH", "DOB", "DaysInactive", "SenNum"]  # data to fetch
-    lookup = pd.concat(  # one table holding every pilot from both airlines
+    lookup_columns = ["NameID", "LastName", "FirstName", "Airline", "Rank", "Equip", "DOH", "DOB", "DaysInactive", "SenNum", "ListNum"]  # data to fetch
+    lookup = pd.concat(  # one table holding every pilot from both lists
         [SenList1[lookup_columns], SenList2[lookup_columns]],  # the two source lists
         ignore_index=True,  # renumber rows
     ).rename(columns={"SenNum": "OrigSenNum"})  # keep the pre-merger list number under a different name
@@ -604,30 +601,47 @@ def Create_IPSL(StovepipedList, ConstNoticeList, SenList1, SenList2):  # the ful
     if missing:  # at least one pilot could not be found
         raise ValueError(f"NameID(s) not found in SenList1/SenList2 while building IPSL: {missing}")  # stop
 
-    IPSL = IPSL[["LastName", "FirstName", "NameID", "Airline", "Rank", "Equip", "DOH", "DOB", "DaysInactive", "OrigSenNum"]]  # column order
+    IPSL = IPSL[["LastName", "FirstName", "NameID", "Airline", "Rank", "Equip", "DOH", "DOB", "DaysInactive", "OrigSenNum", "ListNum"]].copy()  # column order
     IPSL.insert(0, "SenNum", range(1, len(IPSL) + 1))  # first column = row number in the integrated list
+    IPSL["Notice"] = IPSL["NameID"].isin(ConstNoticeList["NameID"]).to_numpy()  # True for constructive-notice pilots
 
     total_rows = len(IPSL)  # pilots in the integrated list
+    list_totals = {1: len(SenList1), 2: len(SenList2)}  # pilots per list before the merger
 
-    airline1_code = SenList1["Airline"].iloc[0]  # airline 1's code
-    airline2_code = SenList2["Airline"].iloc[0]  # airline 2's code
-    airline_totals = {airline1_code: len(SenList1), airline2_code: len(SenList2)}  # pilots per airline before the merger
-
-    # Months between this pilot's DOH and the DOH of the nearest pilot from the other airline above him (blank if none).
+    # Months between this pilot's DOH and the DOH of the nearest pilot from the other list above him (blank if none).
     IPSL["DOHDiffMonths"] = pd.to_numeric(  # numeric column
-        pd.Series(compute_doh_differential(IPSL, airline1_code, airline2_code), index=IPSL.index),  # one value per pilot
+        pd.Series(compute_doh_differential(IPSL), index=IPSL.index),  # one value per pilot
         errors="coerce",  # blanks become NaN
     ).round(1)  # one decimal place
 
     IPSL["PreMergeRelSen"] = IPSL.apply(  # pre-merger relative seniority as a percentile (most senior = 100, most junior = 0)
-        lambda row: round((airline_totals[row["Airline"]] - row["OrigSenNum"]) / max(airline_totals[row["Airline"]] - 1, 1) * 100, 3), axis=1  # (size - number) / (size - 1)
+        lambda row: round((list_totals[row["ListNum"]] - row["OrigSenNum"]) / max(list_totals[row["ListNum"]] - 1, 1) * 100, 3), axis=1  # (size - number) / (size - 1)
     )  # end PreMergeRelSen
     IPSL["PostMergeRelSen"] = ((total_rows - IPSL["SenNum"]) / max(total_rows - 1, 1) * 100).round(3)  # post-merger percentile in the IPSL
 
     return IPSL[  # final column order
         ["SenNum", "LastName", "FirstName", "NameID", "Airline", "Rank", "Equip", "DOH", "DOB",  # identity and hire data
-         "DaysInactive", "DOHDiffMonths", "PreMergeRelSen", "PostMergeRelSen"]  # inactivity and relative seniority
+         "DaysInactive", "DOHDiffMonths", "PreMergeRelSen", "PostMergeRelSen", "ListNum", "Notice"]  # inactivity, relative seniority, helpers
     ]  # end of the returned table
+
+
+def Create_IPSL_Single(SenList):  # ONE airline only: the "IPSL" is simply that airline's own list, in its own order
+    IPSL = SenList.sort_values("SenNum", kind="mergesort").reset_index(drop=True)  # the list in seniority order
+    total_rows = len(IPSL)  # number of pilots
+    out = IPSL[["LastName", "FirstName", "NameID", "Airline", "Rank", "Equip", "DOH", "DOB", "DaysInactive"]].copy()  # kept columns
+    out.insert(0, "SenNum", range(1, total_rows + 1))  # 1..N (the file's own numbers may have gaps)
+    out["DOHDiffMonths"] = np.nan  # no other airline to compare with
+    rel = ((total_rows - out["SenNum"]) / max(total_rows - 1, 1) * 100).round(3)  # percentile in the list
+    out["PreMergeRelSen"] = rel  # same as post-merger (there is no merger)
+    out["PostMergeRelSen"] = rel  # percentile in the list
+    out["ListNum"] = IPSL["ListNum"].to_numpy()  # which file the pilots came from
+    out["Notice"] = False  # constructive notice does not apply
+    return out  # the list
+
+
+def present_pilot_ids(IPSL):  # Pilot ID = 3 letters of last name + 3 of first name + present seniority number, e.g. SMIPAT853
+    code = IPSL["LastName"].str[:3].str.upper() + IPSL["FirstName"].str[:3].str.upper()  # six-letter name code
+    return (code + IPSL["SenNum"].astype(str)).str.replace(" ", "", regex=False)  # no spaces
 
 
 def Create_IPSL_Abridged(IPSL):  # short version of the IPSL for display
@@ -635,13 +649,17 @@ def Create_IPSL_Abridged(IPSL):  # short version of the IPSL for display
         IPSL["LastName"].str[:3].str.upper()  # first 3 letters of the last name
         + IPSL["FirstName"].str[:3].str.upper()  # first 3 letters of the first name
     )  # end name
+    if "NewHire" in IPSL.columns:  # future list: placeholder pilots are shown as NEWHIR
+        name = name.where(~IPSL["NewHire"].astype(bool), "NEWHIR")  # replace the name code for New Hires
+    pilot_id = IPSL["PilotID"] if "PilotID" in IPSL.columns else present_pilot_ids(IPSL)  # stable ID (future lists carry the present-day one)
     IPSL_Abridged = pd.DataFrame({  # build the abridged table
         "SenNum": IPSL["SenNum"],  # seniority number
         "Name": name,  # name code
-        "Airline": IPSL["Airline"],  # airline code
+        "PilotID": pilot_id,  # name code + present-day seniority number
+        "Airline": IPSL["Airline"],  # airline code (NEW for New Hire placeholders)
         "Rank": IPSL["Rank"],  # rank
         "Equip": IPSL["Equip"],  # equipment
-        "DOH": IPSL["DOH"].dt.date,  # date of hire without the time
+        "DOH": IPSL["DOH"].dt.strftime("%Y-%m-%d").fillna(""),  # date of hire as text (blank for New Hires)
     })  # end IPSL_Abridged
     return IPSL_Abridged  # the abridged table
 
@@ -686,46 +704,146 @@ def pick_grid_dimensions(total, candidates=(25, 50, 100)):  # (squares per row, 
     return cols, rows  # grid size
 
 
-def compute_doh_differential(IPSL, airline1_code, airline2_code):  # months to the nearest other-airline pilot above
-    last_doh = {airline1_code: None, airline2_code: None}  # DOH of the most recent pilot seen from each airline
+NEW_HIRE_GREY = "#D3D3D3"  # light grey used for New Hire placeholder pilots on every chart
+NEW_HIRE_ROW = "#E9ECEF"  # very light grey row tint for New Hire pilots in the Abridged IPSL tables
+
+
+def compute_doh_differential(IPSL):  # months to the nearest pilot from the other list above (one list = nothing to compare)
+    last_doh = {1: None, 2: None}  # DOH of the most recent pilot seen from each list
     ordered = IPSL.sort_values("SenNum")  # make sure we walk down the list in seniority order
     results = []  # one value per pilot
-    for airline, doh in zip(ordered["Airline"], ordered["DOH"]):  # each pilot, top to bottom
-        other = airline2_code if airline == airline1_code else airline1_code  # the other airline
-        ref = last_doh.get(other)  # DOH of the nearest other-airline pilot above (None if none yet)
+    for lst, doh in zip(ordered["ListNum"], ordered["DOH"]):  # each pilot, top to bottom
+        other = 2 if lst == 1 else 1  # the other list
+        ref = last_doh.get(other)  # DOH of the nearest other-list pilot above (None if none yet)
         results.append(None if ref is None else (doh - ref).days / 30.4375)  # difference in months
-        last_doh[airline] = doh  # this pilot becomes the latest from his own airline
+        last_doh[lst] = doh  # this pilot becomes the latest from his own list
     return results  # list aligned with the list order
 
 
-def build_position_groups(IPSL, airline1_code, airline2_code):  # ordered (Airline, Rank, Equip) combinations
+def build_position_groups(IPSL, codes):  # ordered (Airline, Rank, Equip) combinations, airlines alternating within each rank
     combos = IPSL[["Airline", "Rank", "Equip"]].drop_duplicates()  # distinct combinations present
     ranks_order = sorted(combos["Rank"].unique())  # ranks alphabetically (CA, FO, RP)
     ordered = []  # result list
     for rank in ranks_order:  # one rank at a time
-        a1 = combos.loc[(combos["Airline"] == airline1_code) & (combos["Rank"] == rank), "Equip"].tolist()  # airline 1 equipment
-        a2 = combos.loc[(combos["Airline"] == airline2_code) & (combos["Rank"] == rank), "Equip"].tolist()  # airline 2 equipment
-        for i in range(max(len(a1), len(a2))):  # alternate between the airlines
-            if i < len(a1):  # airline 1 still has one
-                ordered.append((airline1_code, rank, a1[i]))  # add it
-            if i < len(a2):  # airline 2 still has one
-                ordered.append((airline2_code, rank, a2[i]))  # add it
+        per = [combos.loc[(combos["Airline"] == c) & (combos["Rank"] == rank), "Equip"].tolist() for c in codes]  # equipment per airline
+        for i in range(max((len(p) for p in per), default=0)):  # alternate between the airlines
+            for c, p in zip(codes, per):  # each airline
+                if i < len(p):  # this airline still has one
+                    ordered.append((c, rank, p[i]))  # add it
     return ordered  # the ordered combinations
 
 
 def position_color_map(data):  # (ordered groups, colour for each group)
-    c1, c2 = data["airline1_code"], data["airline2_code"]  # airline codes
-    groups = build_position_groups(data["IPSL"], c1, c2)  # ordered combinations
+    ref = data.get("ref_IPSL", data["IPSL"])  # future charts reuse today's groups so colours stay the same every year
+    codes = [a["code"] for a in data["airlines"]]  # every airline code
+    groups = build_position_groups(ref, codes)  # ordered combinations
     colors = {}  # group -> hex colour
-    for code, base in ((c1, data["airline1_color"]), (c2, data["airline2_color"])):  # each airline with its colour
-        mine = [g for g in groups if g[0] == code]  # this airline's combinations
+    for a in data["airlines"]:  # each airline with its colour
+        mine = [g for g in groups if g[0] == a["code"]]  # this airline's combinations
         for i, g in enumerate(mine):  # give each a different shade
-            colors[g] = shade_color(base, i, len(mine))  # shade of the airline colour
+            colors[g] = shade_color(a["color"], i, len(mine))  # shade of the airline colour
     return groups, colors  # groups and colours
 
 
 def airline_label(data, code):  # airline code -> airline name
-    return data["airline1_name"] if code == data["airline1_code"] else data["airline2_name"]  # pick the matching name
+    for a in data["airlines"]:  # look through the airlines
+        if a["code"] == code:  # found it
+            return a["name"]  # its name
+    return code  # fall back to the code
+
+
+def _new_hire_flags(IPSL):  # True for every New Hire placeholder pilot (all False on today's list)
+    if "NewHire" in IPSL.columns:  # future list
+        return IPSL["NewHire"].astype(bool).to_numpy()  # flags from the list
+    return np.zeros(len(IPSL), dtype=bool)  # nobody is a New Hire
+
+
+def airline_tints(data):  # row tint for each airline code (New Hires get light grey)
+    tints = {a["code"]: light_color(a["color"]) for a in data["airlines"]}  # light version of each airline colour
+    tints["NEW"] = NEW_HIRE_ROW  # New Hire rows
+    return tints  # code -> colour
+
+
+def list_label(data):  # names of the lists joined with a hyphen, e.g. "Air Superior-Thunder Air"
+    return "-".join(l["name"] for l in data["lists"])  # one name for one airline, two for a merger
+
+
+def report_title(data):  # title of the report page / PDF
+    if len(data["lists"]) == 1:  # one airline only
+        return f"{data['lists'][0]['name']} Pilot Seniority List"  # no merger
+    return f"{list_label(data)} Integrated Pilot Seniority List"  # merger
+
+
+def draw_dot_chart(ax, data):  # dot chart coloured by each pilot's airline + rank + equipment
+    IPSL = data["IPSL"]  # the list being drawn
+    cols, rows = pick_grid_dimensions(len(IPSL))  # grid size
+    groups, colors = position_color_map(data)  # colour for each airline/rank/equipment
+    rgb = {g: hex_to_rgb(c) for g, c in colors.items()}  # the same colours as RGB triples
+    grey = hex_to_rgb(NEW_HIRE_GREY)  # New Hire colour
+    flags = _new_hire_flags(IPSL)  # which pilots are New Hires
+
+    grid = np.ones((rows, cols, 3))  # white background (unused cells stay white)
+    for i, key in enumerate(zip(IPSL["Airline"], IPSL["Rank"], IPSL["Equip"])):  # each pilot in seniority order
+        r, c = divmod(i, cols)  # row and column of this pilot's square
+        grid[r, c] = grey if flags[i] else rgb[key]  # light grey for New Hires, otherwise airline/rank/equipment colour
+    _draw_dot_grid(ax, grid, cols, rows, "Dot Chart by Rank and Equipment")  # paint the grid
+
+    sets = []  # one legend per airline (plus one for New Hires)
+    for a in data["airlines"]:  # each airline
+        mine = [g for g in groups if g[0] == a["code"]]  # this airline's combinations
+        sets.append(([Patch(facecolor=colors[g], edgecolor="none") for g in mine], [f"{g[2]} {g[1]}" for g in mine], a["name"]))  # swatches, labels, title
+    if flags.any():  # New Hire pilots are present
+        sets.append(([Patch(facecolor=NEW_HIRE_GREY, edgecolor="none")], ["New Hire"], "Growth"))  # grey swatch
+    for i, (handles, labels, title) in enumerate(sets):  # place the legends side by side under the chart
+        leg = ax.legend(handles, labels, title=title, loc="upper left", bbox_to_anchor=(i / len(sets), -0.02),  # i-th legend
+                        frameon=False, fontsize=7, title_fontsize=8, ncol=1, borderaxespad=0)  # no frame, one column
+        leg._legend_box.align = "left"  # left-align the legend title
+        if i < len(sets) - 1:  # keep it when the next legend is added
+            ax.add_artist(leg)  # stays on the chart
+
+
+def draw_dot_chart_airline(ax, data):  # dot chart with one colour per airline; constructive-notice pilots lighter; New Hires grey
+    IPSL = data["IPSL"]  # the list being drawn
+    total = len(IPSL)  # number of pilots
+    cols, rows = pick_grid_dimensions(total)  # grid size
+    flags = _new_hire_flags(IPSL)  # New Hire pilots
+    notice = IPSL["Notice"].astype(bool).to_numpy() if "Notice" in IPSL.columns else np.zeros(total, dtype=bool)  # constructive-notice pilots
+    main_rgb = {a["code"]: hex_to_rgb(a["color"]) for a in data["airlines"]}  # normal squares
+    light_rgb = {a["code"]: hex_to_rgb(light_color(a["color"], 0.5)) for a in data["airlines"]}  # lighter shade for constructive notice
+    grey = hex_to_rgb(NEW_HIRE_GREY)  # New Hire colour
+
+    grid = np.ones((rows, cols, 3))  # white background
+    for i, airline in enumerate(IPSL["Airline"]):  # each pilot in seniority order
+        r, c = divmod(i, cols)  # row and column of this pilot's square
+        if flags[i]:  # New Hire
+            grid[r, c] = grey  # light grey
+        else:  # existing pilot
+            grid[r, c] = light_rgb[airline] if notice[i] else main_rgb[airline]  # lighter for constructive notice
+    _draw_dot_grid(ax, grid, cols, rows, "Dot Chart by Airline")  # paint the grid
+
+    handles, labels = [], []  # legend entries
+    for a in data["airlines"]:  # each airline
+        handles.append(Patch(facecolor=a["color"], edgecolor="none"))  # normal swatch
+        labels.append(a["name"])  # its name
+        if notice.any():  # there are constructive-notice pilots
+            handles.append(Patch(facecolor=light_color(a["color"], 0.5), edgecolor="none"))  # lighter swatch
+            labels.append(f"{a['name']} - constructive notice")  # its label
+    if flags.any():  # New Hire pilots are present
+        handles.append(Patch(facecolor=NEW_HIRE_GREY, edgecolor="none"))  # grey swatch
+        labels.append("New Hire")  # its label
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.02), frameon=False,  # legend below the chart
+              fontsize=7, ncol=2, borderaxespad=0)  # two columns, small text
+
+
+def _series_by_airline(data):  # (code, name, colour) for each airline code
+    return [(a["code"], a["name"], a["color"]) for a in data["airlines"]]  # one entry per code
+
+
+def dot_chart_figsize(data, width=6.0):  # figure size that fits the grid plus the legend
+    cols, rows = pick_grid_dimensions(len(data["IPSL"]))  # grid size
+    _, colors = position_color_map(data)  # groups (for the legend length)
+    per_airline = max((sum(1 for g in colors if g[0] == a["code"]) for a in data["airlines"]), default=1)  # longest legend list
+    return (width, width * rows / cols + 0.7 + 0.17 * per_airline)  # width and height in inches
 
 
 def _style_axes(ax):  # common look for the line/box charts
@@ -747,69 +865,6 @@ def _draw_dot_grid(ax, grid, cols, rows, title):  # draws a colour grid with thi
     for spine in ax.spines.values():  # every border
         spine.set_visible(False)  # hide it
     ax.set_title(title, fontsize=9)  # chart title
-
-
-def draw_dot_chart(ax, data):  # dot chart coloured by each pilot's airline + rank + equipment
-    IPSL = data["IPSL"]  # the integrated list
-    cols, rows = pick_grid_dimensions(len(IPSL))  # grid size
-    groups, colors = position_color_map(data)  # colour for each airline/rank/equipment
-    rgb = {g: hex_to_rgb(c) for g, c in colors.items()}  # the same colours as RGB triples
-
-    grid = np.ones((rows, cols, 3))  # white background (unused cells stay white)
-    for i, key in enumerate(zip(IPSL["Airline"], IPSL["Rank"], IPSL["Equip"])):  # each pilot in seniority order
-        r, c = divmod(i, cols)  # row and column of this pilot's square
-        grid[r, c] = rgb[key]  # colour by airline/rank/equipment
-    _draw_dot_grid(ax, grid, cols, rows, "Dot Chart by Rank and Equipment")  # paint the grid
-
-    def entries(code):  # legend entries for one airline
-        mine = [g for g in groups if g[0] == code]  # this airline's combinations
-        return [Patch(facecolor=colors[g], edgecolor="none") for g in mine], [f"{g[2]} {g[1]}" for g in mine]  # swatches, labels
-
-    h1, l1 = entries(data["airline1_code"])  # airline 1 legend entries
-    h2, l2 = entries(data["airline2_code"])  # airline 2 legend entries
-    leg1 = ax.legend(h1, l1, title=data["airline1_name"], loc="upper left", bbox_to_anchor=(0.0, -0.02),  # airline 1 legend, bottom left
-                     frameon=False, fontsize=7, title_fontsize=8, ncol=1, borderaxespad=0)  # no frame, one column
-    leg1._legend_box.align = "left"  # left-align the legend title
-    ax.add_artist(leg1)  # keep it when the second legend is added
-    leg2 = ax.legend(h2, l2, title=data["airline2_name"], loc="upper right", bbox_to_anchor=(1.0, -0.02),  # airline 2 legend, bottom right
-                     frameon=False, fontsize=7, title_fontsize=8, ncol=1, borderaxespad=0)  # no frame, one column
-    leg2._legend_box.align = "left"  # left-align the legend title
-
-
-def draw_dot_chart_airline(ax, data):  # dot chart with only two colours; constructive-notice pilots are lighter
-    IPSL = data["IPSL"]  # the integrated list
-    total = len(IPSL)  # number of pilots
-    n_notice = data.get("n_notice", 0)  # constructive-notice pilots (they are the last rows of the list)
-    cols, rows = pick_grid_dimensions(total)  # grid size
-    main = {data["airline1_code"]: data["airline1_color"], data["airline2_code"]: data["airline2_color"]}  # airline -> colour
-    main_rgb = {k: hex_to_rgb(v) for k, v in main.items()}  # normal squares as RGB
-    light_rgb = {k: hex_to_rgb(light_color(v, 0.5)) for k, v in main.items()}  # lighter shade for constructive notice
-
-    grid = np.ones((rows, cols, 3))  # white background
-    for i, airline in enumerate(IPSL["Airline"]):  # each pilot in seniority order
-        r, c = divmod(i, cols)  # row and column of this pilot's square
-        grid[r, c] = light_rgb[airline] if i >= total - n_notice else main_rgb[airline]  # lighter for constructive notice
-    _draw_dot_grid(ax, grid, cols, rows, "Dot Chart by Airline")  # paint the grid
-
-    handles = [Patch(facecolor=data["airline1_color"], edgecolor="none")]  # airline 1 swatch
-    labels = [data["airline1_name"]]  # airline 1 label
-    if n_notice:  # there are constructive-notice pilots
-        handles.append(Patch(facecolor=light_color(data["airline1_color"], 0.5), edgecolor="none"))  # airline 1 lighter swatch
-        labels.append(f"{data['airline1_name']} - constructive notice")  # its label
-    handles.append(Patch(facecolor=data["airline2_color"], edgecolor="none"))  # airline 2 swatch
-    labels.append(data["airline2_name"])  # airline 2 label
-    if n_notice:  # there are constructive-notice pilots
-        handles.append(Patch(facecolor=light_color(data["airline2_color"], 0.5), edgecolor="none"))  # airline 2 lighter swatch
-        labels.append(f"{data['airline2_name']} - constructive notice")  # its label
-    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.02), frameon=False,  # legend below the chart
-              fontsize=7, ncol=2, borderaxespad=0)  # two columns, small text
-
-
-def _series_by_airline(data):  # (code, name, colour) for each airline
-    return [  # the two airlines
-        (data["airline1_code"], data["airline1_name"], data["airline1_color"]),  # airline 1
-        (data["airline2_code"], data["airline2_name"], data["airline2_color"]),  # airline 2
-    ]  # end of list
 
 
 def _draw_median(ax, value, color, unit=""):  # dashed horizontal line at a median, with its value beside it
@@ -1001,17 +1056,7 @@ def draw_hire_scatter_post(ax, data):  # POST-merger (IPSL) relative seniority v
     for code, name, color in _series_by_airline(data):  # each airline
         mine = IPSL[IPSL["Airline"] == code]  # this airline's pilots
         ax.scatter(mine["PostMergeRelSen"], _decimal_year(mine["DOH"]), s=4, color=color, label=name)  # integrated list position
-    _hire_axes(ax, data, "Post-Merger (IPSL) Relative Seniority vs Year of Hire")  # axes, title, legend
-
-
-def dot_chart_figsize(data, width=6.0):  # figure size that fits the grid plus the legend
-    cols, rows = pick_grid_dimensions(len(data["IPSL"]))  # grid size
-    _, colors = position_color_map(data)  # groups (for the legend length)
-    per_airline = max(  # longest legend list
-        sum(1 for g in colors if g[0] == data["airline1_code"]),  # airline 1 entries
-        sum(1 for g in colors if g[0] == data["airline2_code"]),  # airline 2 entries
-    )  # end max
-    return (width, width * rows / cols + 0.7 + 0.17 * per_airline)  # width and height in inches
+    _hire_axes(ax, data, "Relative Seniority vs Year of Hire" if data.get("mode") == "single" else "Post-Merger (IPSL) Relative Seniority vs Year of Hire")  # axes, title, legend
 
 
 # ======================================================================
@@ -1026,9 +1071,19 @@ def export_stamp():  # current date and time as YYYYMMDD-HHMM
 
 
 def build_ipsl_csv_bytes(data):  # the FULL IPSL (not abridged) as CSV bytes
-    out = data["IPSL"].copy()  # work on a copy
+    out = data["IPSL"].drop(columns=["ListNum", "Notice"], errors="ignore").copy()  # work on a copy, without the internal helper columns
     out["DOH"] = out["DOH"].dt.date  # date only (no time)
     out["DOB"] = out["DOB"].dt.date  # date only (no time)
+    return out.to_csv(index=False).encode("utf-8")  # CSV text as bytes
+
+
+def build_future_csv_bytes(data, k):  # the FULL future list for Present+k as CSV bytes (New Hires included)
+    fut = data["future"]["years"][k]["IPSL"]  # that year's list
+    out = fut[["SenNum", "PilotID", "LastName", "FirstName", "NameID", "Airline", "Rank", "Equip", "DOH", "DOB",  # columns written
+               "PresentSenNum", "NewHire", "PostMergeRelSen"]].copy()  # identity, origin, percentile
+    out["DOH"] = out["DOH"].dt.strftime("%Y-%m-%d")  # date only (blank for New Hires)
+    out["DOB"] = out["DOB"].dt.strftime("%Y-%m-%d")  # date only (blank for New Hires)
+    out["PresentSenNum"] = out["PresentSenNum"].astype("Int64")  # whole numbers (blank for New Hires)
     return out.to_csv(index=False).encode("utf-8")  # CSV text as bytes
 
 
@@ -1097,52 +1152,68 @@ def _listing_pages(pdf, title, headers, rows, row_colors, per_page, figsize, fon
         plt.close(fig)  # free memory
 
 
+ABRIDGED_HEADERS = ["Sen #", "Name", "Pilot ID", "Airline", "Rank", "Equip", "DOH"]  # column headings of the Abridged IPSL
+
+
+def abridged_pdf_rows(data):  # text rows and row colours for the Abridged IPSL pages
+    ab = data["IPSL_Abridged"]  # abridged table
+    tint = airline_tints(data)  # row colour for each airline (grey for New Hires)
+    rows = [[str(r.SenNum), r.Name, r.PilotID, r.Airline, r.Rank, r.Equip, str(r.DOH)] for r in ab.itertuples(index=False)]  # text rows
+    colors = [tint[x] for x in ab["Airline"]]  # row colours
+    return rows, colors  # both
+
+
 def build_pdf_bytes(data):  # the report as a multi-page PDF (bytes)
     buf = io.BytesIO()  # in-memory file
-    a1, a2 = data["airline1_name"], data["airline2_name"]  # airline names
+    single = data["mode"] == "single"  # one airline only?
+    lists = data["lists"]  # the airline lists
     with PdfPages(buf) as pdf:  # open the PDF for writing
-        # ---- page 1: title, contact, parameters, both dot charts ----
+        # ---- page 1: title, contact, parameters, Category Count, both dot charts ----
         fig = plt.figure(figsize=(11, 8.5))  # landscape letter page
-        fig.text(0.5, 0.955, f"{a1}-{a2} Integrated Pilot Seniority List", ha="center", fontsize=17, weight="bold")  # title
+        fig.text(0.5, 0.955, report_title(data), ha="center", fontsize=17, weight="bold")  # title
         fig.text(0.5, 0.925, f"{CONTACT_SITE}   |   {CONTACT_EMAIL}", ha="center", fontsize=9)  # website and e-mail
         fig.text(0.5, 0.903, f"Prepared on {data['prepared_at']}", ha="center", fontsize=9)  # date and time
-        fig.text(0.05, 0.875, "Integration Parameters", fontsize=11, weight="bold", va="top")  # section heading
-        fig.text(  # parameter lines
-            0.05, 0.848,  # position
-            f"Status and Category weight: {data['category_weight_pct']}%\n"  # category weight
-            f"Longevity weight: {data['longevity_weight_pct']}%\n"  # longevity weight
-            f"Exclude Inactive Periods: {'Yes' if data['exclude_inactive'] else 'No'}\n"  # checkbox
-            f"Constructive Notice Date: {data['constructive_notice_date']}\n"  # notice date
-            f"Normal Retirement Age: {data['retirement_age']}",  # retirement age
-            fontsize=9, va="top", linespacing=1.6,  # small text with line spacing
-        )  # end of the parameter text
-        ax = fig.add_axes([0.28, 0.66, 0.22, 0.21])  # area for the category table
-        ax.axis("off")  # no axes lines
-        tbl = ax.table(  # category table
-            cellText=_category_rows(data),  # body rows
-            colLabels=["Category", a1, a2],  # headings
-            loc="upper left", cellLoc="center", colWidths=[0.42, 0.29, 0.29],  # placement and widths
-        )  # end table
-        tbl.auto_set_font_size(False)  # fixed font size
-        tbl.set_fontsize(7)  # small text
-        tbl.scale(1, 1.05)  # slightly shorter rows
-        for (row, col), cell in tbl.get_celld().items():  # every cell
-            if row == 0:  # the heading row
-                cell.set_text_props(weight="bold")  # bold headings
-        fig.text(0.75, 0.912, "Category Count", ha="center", fontsize=10, weight="bold", va="top")  # title above the count tables
-        for x0, key, name, color in ((0.52, "count_info1", a1, data["airline1_color"]), (0.76, "count_info2", a2, data["airline2_color"])):  # one table per airline
+        fig.text(0.05, 0.875, "Parameters" if single else "Integration Parameters", fontsize=11, weight="bold", va="top")  # section heading
+        if single:  # one airline: only the retirement age matters
+            param_text = f"Normal Retirement Age: {data['retirement_age']}"  # one line
+        else:  # merger
+            param_text = (  # parameter lines
+                f"Status and Category weight: {data['category_weight_pct']}%\n"  # category weight
+                f"Longevity weight: {data['longevity_weight_pct']}%\n"  # longevity weight
+                f"Exclude Inactive Periods: {'Yes' if data['exclude_inactive'] else 'No'}\n"  # checkbox
+                f"Constructive Notice Date: {data['constructive_notice_date']}\n"  # notice date
+                f"Normal Retirement Age: {data['retirement_age']}"  # retirement age
+            )  # end of the parameter text
+        fig.text(0.05, 0.848, param_text, fontsize=9, va="top", linespacing=1.6)  # small text with line spacing
+        if not single:  # merger: the category table
+            ax = fig.add_axes([0.28, 0.66, 0.22, 0.21])  # area for the category table
+            ax.axis("off")  # no axes lines
+            tbl = ax.table(  # category table
+                cellText=_category_rows(data),  # body rows
+                colLabels=["Category", lists[0]["name"], lists[1]["name"]],  # headings
+                loc="upper left", cellLoc="center", colWidths=[0.42, 0.29, 0.29],  # placement and widths
+            )  # end table
+            tbl.auto_set_font_size(False)  # fixed font size
+            tbl.set_fontsize(7)  # small text
+            tbl.scale(1, 1.05)  # slightly shorter rows
+            for (row, col), cell in tbl.get_celld().items():  # every cell
+                if row == 0:  # the heading row
+                    cell.set_text_props(weight="bold")  # bold headings
+        x_positions = (0.52, 0.76) if not single else (0.56,)  # where each Category Count table goes
+        fig.text(0.75 if not single else 0.67, 0.912, "Category Count", ha="center", fontsize=10, weight="bold", va="top")  # title above the count tables
+        for x0, lst in zip(x_positions, lists):  # one table per airline list
             axc = fig.add_axes([x0, 0.66, 0.22, 0.20])  # area for this count table
             axc.axis("off")  # no axes lines
-            rows_c = _count_rows(data[key])  # text rows
+            rows_c = _count_rows(lst["count_info"])  # text rows
             ctbl = axc.table(  # the count table
                 cellText=rows_c, colLabels=["Equip", *RANK_COLUMNS, "Total"],  # body and headings
-                cellColours=[[light_color(color, 0.72)] * 5] * len(rows_c), colColours=[light_color(color, 0.55)] * 5,  # tinted in the airline colour
+                cellColours=[[light_color(lst["color"], 0.72)] * 5] * len(rows_c), colColours=[light_color(lst["color"], 0.55)] * 5,  # tinted in the airline colour
                 loc="upper left", cellLoc="center", colWidths=[0.34, 0.15, 0.15, 0.15, 0.2],  # placement and widths
             )  # end table
             ctbl.auto_set_font_size(False)  # fixed font size
             ctbl.set_fontsize(6.5)  # small text
             ctbl.scale(1, 1.05)  # slightly shorter rows
-            axc.set_title(name, fontsize=8, weight="bold")  # airline name above its table
+            axc.set_title(lst["name"], fontsize=8, weight="bold")  # airline name above its table
             for (row, col), cell in ctbl.get_celld().items():  # every cell
                 if row == 0:  # the heading row
                     cell.set_text_props(weight="bold")  # bold headings
@@ -1153,36 +1224,74 @@ def build_pdf_bytes(data):  # the report as a multi-page PDF (bytes)
         pdf.savefig(fig)  # write page 1
         plt.close(fig)  # free memory
 
-        # ---- page 2: the four analysis charts ----
-        fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))  # 2 x 2 grid of charts
-        draw_doh_diff(axes[0, 0], data)  # top left: DOH differential
-        draw_relsen_diff(axes[0, 1], data)  # top right: relative seniority difference
-        draw_relsen_variance(axes[1, 0], data)  # bottom left: relative seniority variance
-        draw_box_plot(axes[1, 1], data)  # bottom right: box plot
-        fig.tight_layout(pad=1.5)  # stop labels overlapping
-        pdf.savefig(fig)  # write page 2
-        plt.close(fig)  # free memory
+        if single:  # ---- one airline: a single page of analysis charts ----
+            fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))  # 2 x 2 grid of charts
+            draw_box_plot(axes[0, 0], data)  # top left: box plot
+            draw_hire_scatter_post(axes[0, 1], data)  # top right: relative seniority vs year of hire
+            draw_age_distribution(axes[1, 0], data)  # bottom left: age distribution
+            draw_retirement(axes[1, 1], data)  # bottom right: retirements per year
+            fig.tight_layout(pad=1.5)  # stop labels overlapping
+            pdf.savefig(fig)  # write page 2
+            plt.close(fig)  # free memory
+        else:  # ---- merger: two pages of analysis charts ----
+            fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))  # 2 x 2 grid of charts
+            draw_doh_diff(axes[0, 0], data)  # top left: DOH differential
+            draw_relsen_diff(axes[0, 1], data)  # top right: relative seniority difference
+            draw_relsen_variance(axes[1, 0], data)  # bottom left: relative seniority variance
+            draw_box_plot(axes[1, 1], data)  # bottom right: box plot
+            fig.tight_layout(pad=1.5)  # stop labels overlapping
+            pdf.savefig(fig)  # write page 2
+            plt.close(fig)  # free memory
 
-        # ---- page 3: age distribution, retirements, relative seniority vs year of hire ----
-        fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))  # 2 x 2 grid (one cell left empty)
-        draw_hire_scatter_pre(axes[0, 0], data)  # top left: pre-merger relative seniority vs year of hire
-        draw_hire_scatter_post(axes[0, 1], data)  # top right: post-merger relative seniority vs year of hire
-        draw_age_distribution(axes[1, 0], data)  # bottom left: age distribution
-        draw_retirement(axes[1, 1], data)  # bottom right: retirements per year
-        fig.tight_layout(pad=1.5)  # stop labels overlapping
-        pdf.savefig(fig)  # write page 3
-        plt.close(fig)  # free memory
+            fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))  # 2 x 2 grid (one cell left empty)
+            draw_hire_scatter_pre(axes[0, 0], data)  # top left: pre-merger relative seniority vs year of hire
+            draw_hire_scatter_post(axes[0, 1], data)  # top right: post-merger relative seniority vs year of hire
+            draw_age_distribution(axes[1, 0], data)  # bottom left: age distribution
+            draw_retirement(axes[1, 1], data)  # bottom right: retirements per year
+            fig.tight_layout(pad=1.5)  # stop labels overlapping
+            pdf.savefig(fig)  # write page 3
+            plt.close(fig)  # free memory
 
         # ---- remaining pages: abridged IPSL, rows tinted with the airline colour ----
-        ab = data["IPSL_Abridged"]  # abridged table
-        tint = {  # row colour for each airline
-            data["airline1_code"]: light_color(data["airline1_color"]),  # airline 1
-            data["airline2_code"]: light_color(data["airline2_color"]),  # airline 2
-        }  # end tint
-        rows = [[str(r.SenNum), r.Name, r.Airline, r.Rank, r.Equip, str(r.DOH)] for r in ab.itertuples(index=False)]  # text rows
+        rows, colors = abridged_pdf_rows(data)  # text rows and colours
         _listing_pages(  # write the table pages
-            pdf, f"{a1}-{a2} Abridged IPSL", ["Sen #", "Name", "Airline", "Rank", "Equip", "DOH"],  # document, title, headings
-            rows, [tint[x] for x in ab["Airline"]], per_page=60, figsize=(8.5, 11), fontsize=9,  # rows, row colours, layout
+            pdf, f"{list_label(data)} Abridged IPSL", ABRIDGED_HEADERS,  # document, title, headings
+            rows, colors, per_page=60, figsize=(8.5, 11), fontsize=9,  # rows, row colours, layout
+        )  # end _listing_pages
+    return buf.getvalue()  # the finished PDF as bytes
+
+
+def build_future_pdf_bytes(data, k):  # dot charts + Abridged IPSL for Present+k (New Hire pilots in light grey)
+    view = future_view_data(data, k)  # the future list in the same shape the chart code expects
+    f = data["future"]  # all future calculations
+    n_new = f["years"][k]["n_new"]  # New Hire pilots on this list
+    total = len(view["IPSL"])  # pilots on this list
+    buf = io.BytesIO()  # in-memory file
+    with PdfPages(buf) as pdf:  # open the PDF for writing
+        fig = plt.figure(figsize=(11, 8.5))  # landscape letter page
+        fig.text(0.5, 0.955, f"{list_label(data)} Future Seniority List - {year_label(data, k)}", ha="center", fontsize=16, weight="bold")  # title
+        fig.text(0.5, 0.925, f"{CONTACT_SITE}   |   {CONTACT_EMAIL}", ha="center", fontsize=9)  # website and e-mail
+        fig.text(0.5, 0.903, f"Prepared on {data['prepared_at']}", ha="center", fontsize=9)  # date and time
+        fig.text(0.05, 0.872, (  # what this list contains
+            f"Pilots reaching Normal Retirement Age ({data['retirement_age']}) by {f['present_year'] + k} have been removed.\n"  # retirements
+            f"Total pilots: {total}   |   New Hire placeholder pilots (light grey): {n_new}"  # New Hires
+        ), fontsize=9, va="top", linespacing=1.6)  # small text
+        g_lines = ["Future Block Growth entered (% change in headcount vs today):"]  # growth summary
+        for e in f["equips"]:  # each Equip
+            gp = f["growth"].get(e, {})  # that Equip's entries
+            cells = ["" if gp.get(y) is None or pd.isna(gp.get(y)) else f"{gp[y]:+g}%" for y in GROWTH_YEARS]  # +3, +5, +10
+            g_lines.append(f"  {e}:  +3 yrs {cells[0] or '-'}   +5 yrs {cells[1] or '-'}   +10 yrs {cells[2] or '-'}")  # one line per Equip
+        fig.text(0.62, 0.872, "\n".join(g_lines[:14]), fontsize=7.5, va="top", linespacing=1.4, family="DejaVu Sans Mono")  # compact list
+        ax1 = fig.add_axes([0.04, 0.18, 0.45, 0.50])  # left dot chart area
+        draw_dot_chart(ax1, view)  # dot chart by rank and equipment
+        ax2 = fig.add_axes([0.53, 0.18, 0.45, 0.50])  # right dot chart area
+        draw_dot_chart_airline(ax2, view)  # dot chart by airline
+        pdf.savefig(fig)  # write page 1
+        plt.close(fig)  # free memory
+        rows, colors = abridged_pdf_rows(view)  # Abridged IPSL pages
+        _listing_pages(  # write the table pages
+            pdf, f"{list_label(data)} Abridged IPSL - {year_label(data, k)}", ABRIDGED_HEADERS,  # title, headings
+            rows, colors, per_page=60, figsize=(8.5, 11), fontsize=9,  # rows, row colours, layout
         )  # end _listing_pages
     return buf.getvalue()  # the finished PDF as bytes
 
@@ -1193,11 +1302,7 @@ IPSL_PDF_HEADERS = ["Sen #", "Last Name", "First Name", "NameID", "Airline", "Ra
 
 def build_ipsl_pdf_bytes(data):  # the FULL IPSL as a landscape PDF, every row tinted with its airline's colour
     ipsl = data["IPSL"]  # full list
-    a1, a2 = data["airline1_name"], data["airline2_name"]  # airline names
-    tint = {  # row background for each airline
-        data["airline1_code"]: light_color(data["airline1_color"]),  # airline 1
-        data["airline2_code"]: light_color(data["airline2_color"]),  # airline 2
-    }  # end tint
+    tint = airline_tints(data)  # row background for each airline
     text = pd.DataFrame({  # every cell converted to display text
         "SenNum": ipsl["SenNum"].astype(str),  # integrated seniority number
         "LastName": ipsl["LastName"],  # surname
@@ -1213,10 +1318,11 @@ def build_ipsl_pdf_bytes(data):  # the FULL IPSL as a landscape PDF, every row t
         "PreMergeRelSen": ipsl["PreMergeRelSen"].map(lambda v: f"{v:.3f}"),  # pre-merger relative seniority
         "PostMergeRelSen": ipsl["PostMergeRelSen"].map(lambda v: f"{v:.3f}"),  # post-merger relative seniority
     })  # end text
+    title = f"{list_label(data)} Integrated Pilot Seniority List (IPSL)" if data["mode"] != "single" else f"{list_label(data)} Pilot Seniority List"  # title
     buf = io.BytesIO()  # in-memory file
     with PdfPages(buf) as pdf:  # open the PDF for writing
         _listing_pages(  # write the table pages
-            pdf, f"{a1}-{a2} Integrated Pilot Seniority List (IPSL)", IPSL_PDF_HEADERS,  # document, title, headings
+            pdf, title, IPSL_PDF_HEADERS,  # document, title, headings
             text.values.tolist(), [tint[x] for x in ipsl["Airline"]], per_page=46, figsize=(11, 8.5), fontsize=7,  # rows, colours, layout
         )  # end _listing_pages
     return buf.getvalue()  # the finished PDF as bytes
@@ -1224,12 +1330,17 @@ def build_ipsl_pdf_bytes(data):  # the FULL IPSL as a landscape PDF, every row t
 
 def build_export_files(data):  # all export files: (file name, mime type, bytes)
     stamp = export_stamp()  # date-time stamp for the file names
-    base = f"{_safe(data['airline1_name'])}-{_safe(data['airline2_name'])}"  # "Airline1-Airline2"
-    return [  # the three files
-        (f"{base} IPSL {stamp}.csv", "text/csv", build_ipsl_csv_bytes(data)),  # full IPSL as CSV
-        (f"{base} IPSL {stamp}.pdf", "application/pdf", build_ipsl_pdf_bytes(data)),  # full IPSL as PDF (same name, .pdf)
-        (f"{base} integration data {stamp}.pdf", "application/pdf", build_pdf_bytes(data)),  # report as PDF
-    ]  # end of list
+    base = "-".join(_safe(l["name"]) for l in data["lists"])  # "Airline1-Airline2" (or one name)
+    files = [  # Present
+        (f"{base} IPSL Present {stamp}.csv", "text/csv", build_ipsl_csv_bytes(data)),  # full IPSL as CSV
+        (f"{base} IPSL Present {stamp}.pdf", "application/pdf", build_ipsl_pdf_bytes(data)),  # full IPSL as PDF
+        (f"{base} integration data Present {stamp}.pdf", "application/pdf", build_pdf_bytes(data)),  # report (dot charts, charts, Abridged IPSL) as PDF
+    ]  # end of the Present files
+    if data.get("future"):  # the future lists exist
+        for k in FUTURE_REPORT_YEARS:  # Present+2 ... Present+25
+            files.append((f"{base} IPSL Present+{k} {stamp}.csv", "text/csv", build_future_csv_bytes(data, k)))  # future IPSL as CSV
+            files.append((f"{base} dot charts and Abridged IPSL Present+{k} {stamp}.pdf", "application/pdf", build_future_pdf_bytes(data, k)))  # future dot charts and Abridged IPSL
+    return files  # all files
 
 
 def auto_download_html(files):  # small script that makes the browser save each file
@@ -1269,13 +1380,188 @@ def _fig_for(draw_fn, data, figsize=(6, 3.8)):  # makes a new figure and draws o
     return fig  # the finished figure
 
 
+# ======================================================================
+# Future seniority lists (growth, retirements, New Hire placeholders) and the personalized prediction
+# ======================================================================
+FUTURE_MAX_YEARS = 25  # the future lists run from Present+1 to Present+25
+FUTURE_REPORT_YEARS = [2, 5, 10, 15, 20, 25]  # years that get dot charts, Abridged IPSLs and exports
+GROWTH_YEARS = [3, 5, 10]  # the columns of the Future Block Growth table (years from now)
+
+
+def interpolated_growth(points, k):  # growth % at year k, interpolated straight-line between today (0%) and the entered years
+    pts = [(0, 0.0)]  # today: no growth
+    for year in sorted(points):  # each entered year
+        value = points[year]  # the % the user typed (None if blank)
+        if value is not None and not pd.isna(value):  # a real number
+            pts.append((year, float(value)))  # keep it
+    if k >= pts[-1][0]:  # beyond the last entered year: headcount stays at that level
+        return pts[-1][1]  # flat
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):  # find the two points either side of year k
+        if x0 <= k <= x1:  # k lies between them
+            return y0 + (y1 - y0) * (k - x0) / (x1 - x0)  # straight-line interpolation
+    return 0.0  # not reached
+
+
+def target_headcount(now, points, k):  # pilots wanted in one Equip at year k
+    return int(math.floor(now * (1 + interpolated_growth(points, k) / 100.0) + 0.5))  # rounded to a whole pilot
+
+
+def _make_future_list(IPSL, alive, hires, present_ids):  # the future list: survivors in today's order, New Hires at the bottom
+    keep = IPSL.loc[alive, ["LastName", "FirstName", "NameID", "Airline", "Rank", "Equip", "DOH", "DOB", "SenNum", "Notice"]].copy()  # survivors
+    keep = keep.rename(columns={"SenNum": "PresentSenNum"})  # their number on today's IPSL
+    keep["PilotID"] = present_ids[alive]  # ID never changes, so the same pilot can be found in every year
+    keep["NewHire"] = False  # existing pilots
+    rows = []  # New Hire rows
+    counter = 0  # numbers the New Hires
+    for equip in sorted(hires):  # each Equip that needs hires
+        for _ in range(hires[equip]):  # one row per placeholder pilot
+            counter += 1  # next New Hire
+            rows.append({"LastName": "Hire", "FirstName": "New", "NameID": f"HireNew{counter}NEW", "Airline": "NEW", "Rank": "FO",  # placeholder
+                         "Equip": equip, "DOH": pd.NaT, "DOB": pd.NaT, "PresentSenNum": np.nan, "Notice": False,  # no dates
+                         "PilotID": f"NEWHIR{counter}", "NewHire": True})  # ID and flag
+    if rows:  # at least one New Hire
+        new = pd.DataFrame(rows)  # as a table
+        new["DOH"] = pd.to_datetime(new["DOH"])  # real (empty) dates
+        new["DOB"] = pd.to_datetime(new["DOB"])  # real (empty) dates
+        fut = pd.concat([keep, new], ignore_index=True)  # survivors then New Hires
+    else:  # nobody to add
+        fut = keep.reset_index(drop=True)  # survivors only
+    fut.insert(0, "SenNum", range(1, len(fut) + 1))  # new seniority numbers 1..N
+    fut["PostMergeRelSen"] = ((len(fut) - fut["SenNum"]) / max(len(fut) - 1, 1) * 100).round(3)  # relative seniority percentile
+    return fut  # the future list
+
+
+def compute_position_lines(IPSL):  # per position (Equip + Rank): count-weighted minimum and bottom-10% percentile across the airlines
+    total = len(IPSL)  # pilots on today's IPSL
+
+    def rel(v):  # seniority number -> relative seniority percentile (1 = 100, last = 0)
+        return (total - v) / max(total - 1, 1) * 100  # share of pilots who are more junior
+
+    parts = []  # one row per airline / rank / equipment group (the same groups as the box plot)
+    for (airline, rank, equip), g in IPSL.groupby(["Airline", "Rank", "Equip"]):  # each group
+        sen = g["SenNum"].to_numpy()  # the group's seniority numbers
+        parts.append({"Rank": rank, "Equip": equip, "n": len(g),  # position and head count
+                      "min": rel(float(sen.max())),  # lowest relative seniority held in the group (box-plot bottom)
+                      "b10": rel(float(np.percentile(sen, 90)))})  # bottom 10% of the group
+    df = pd.DataFrame(parts)  # as a table
+    lines = []  # result
+    for (equip, rank), g in df.groupby(["Equip", "Rank"]):  # combine the airlines for each position
+        w = g["n"].astype(float)  # weights = pilots in the position at each airline
+        lines.append({"Equip": equip, "Rank": rank, "n": int(w.sum()),  # label and size
+                      "min": float((g["min"] * w).sum() / w.sum()),  # weighted minimum percentile
+                      "b10": float((g["b10"] * w).sum() / w.sum())})  # weighted bottom-10% percentile
+    return sorted(lines, key=lambda d: (d["Rank"], d["Equip"]))  # CA, FO, RP; equipment alphabetical
+
+
+def build_future(IPSL, growth, nra, present_year):  # all 25 future lists (as percentile curves) and the six display lists
+    IPSL = IPSL.reset_index(drop=True)  # clean row numbers
+    n = len(IPSL)  # pilots today
+    equips = sorted(IPSL["Equip"].unique())  # every equipment type
+    base = IPSL["Equip"].value_counts().to_dict()  # pilots per Equip today (constructive-notice pilots included)
+    ret_year = (IPSL["DOB"].dt.year.fillna(9999) + nra).to_numpy()  # year each pilot reaches Normal Retirement Age
+    equip_arr = IPSL["Equip"].to_numpy()  # Equip of each pilot
+    present_ids = present_pilot_ids(IPSL).to_numpy()  # stable Pilot IDs
+    curves = np.full((n, FUTURE_MAX_YEARS + 1), np.nan)  # relative seniority percentile of each pilot in each year
+    curves[:, 0] = IPSL["PostMergeRelSen"].to_numpy()  # year 0 = today's IPSL
+    years = {}  # k -> the list, for the display years
+    new_hires = {0: 0}  # k -> number of New Hires on that year's list
+    totals = {0: n}  # k -> total pilots on that year's list
+    for k in range(1, FUTURE_MAX_YEARS + 1):  # Present+1 ... Present+25
+        alive = ret_year > present_year + k  # pilots who have NOT yet reached retirement age
+        cum = np.cumsum(alive)  # a survivor's new number = survivors at or above him
+        hires = {}  # New Hires needed per Equip
+        for e in equips:  # each equipment type
+            target = target_headcount(base[e], growth.get(e, {}), k)  # headcount wanted this year
+            survivors = int((alive & (equip_arr == e)).sum())  # pilots still flying it
+            hires[e] = max(0, target - survivors)  # backfill retirements AND add the growth
+        n_new = int(sum(hires.values()))  # total New Hires
+        total = int(alive.sum()) + n_new  # pilots on this year's list
+        curves[:, k] = np.where(alive, np.round((total - cum) / max(total - 1, 1) * 100, 3), np.nan)  # percentile (NaN once retired)
+        new_hires[k] = n_new  # remember
+        totals[k] = total  # remember
+        if k in FUTURE_REPORT_YEARS:  # this year gets a full list
+            fut = _make_future_list(IPSL, alive, hires, present_ids)  # build it
+            years[k] = {"IPSL": fut, "IPSL_Abridged": Create_IPSL_Abridged(fut), "n_new": n_new, "hires": hires}  # keep it
+    return {  # everything the future pages and the export need
+        "years": years, "curves": curves, "present_year": present_year, "growth": growth, "equips": equips,  # lists, curves, inputs
+        "new_hires": new_hires, "totals": totals, "base": {e: int(base[e]) for e in equips},  # counts
+        "pilot_ids": list(present_ids), "id_index": {pid: i for i, pid in enumerate(present_ids)},  # Pilot ID look-up
+        "position_lines": compute_position_lines(IPSL),  # horizontal lines for the personalized graph
+    }  # end of the dictionary
+
+
+def future_view_data(data, k):  # a copy of the report data in which "IPSL" is the future list for year k (so the chart code can be reused)
+    f = data["future"]["years"][k]  # that year's list
+    view = dict(data)  # shallow copy
+    view["IPSL"] = f["IPSL"]  # future list
+    view["IPSL_Abridged"] = f["IPSL_Abridged"]  # its abridged version
+    view["ref_IPSL"] = data["IPSL"]  # colours come from today's groups
+    return view  # the view
+
+
+def year_label(data, k):  # "Present+5 (2031)"
+    return f"Present+{k} ({data['future']['present_year'] + k})"  # label with the calendar year
+
+
+def normalize_pilot_id(text):  # what the user typed -> the form stored in the look-up (upper case, no spaces)
+    return str(text or "").strip().upper().replace(" ", "")  # tidy
+
+
+def draw_personal(ax, data, idx):  # line graph of one pilot's relative seniority percentile, Present to Present+25
+    f = data["future"]  # the future calculations
+    P = f["present_year"]  # present year
+    xs = [P + k for k in range(FUTURE_MAX_YEARS + 1)]  # calendar years
+    ys = f["curves"][idx]  # this pilot's percentile in each year (NaN once retired)
+    cmap = plt.get_cmap("tab10")  # colours for the positions
+    labels = []  # (height, text, colour) for the labels at the right-hand edge
+    for i, pl in enumerate(f["position_lines"]):  # each position
+        col = cmap(i % 10)  # this position's colour
+        ax.axhline(pl["min"], color=col, linestyle=":", linewidth=1.3)  # dotted = minimum relative seniority in the position
+        ax.axhline(pl["b10"], color=col, linestyle="--", linewidth=1.0)  # dashed = bottom 10% of the position
+        labels.append((pl["min"], f"{pl['Equip']} {pl['Rank']} min {pl['min']:.1f}%", col))  # label for the dotted line
+        labels.append((pl["b10"], f"{pl['Equip']} {pl['Rank']} bottom 10% {pl['b10']:.1f}%", col))  # label for the dashed line
+    labels.sort(key=lambda t: t[0])  # lowest first
+    gap = 2.6  # minimum spacing between labels (percentile points) so they do not overlap
+    placed = []  # adjusted heights
+    for h, _t, _c in labels:  # push labels upward when they would collide
+        placed.append(h if not placed else max(h, placed[-1] + gap))  # keep the order, never closer than `gap`
+    for (h, text, col), y_text in zip(labels, placed):  # write the labels beside the plot
+        ax.annotate(text, xy=(1.0, h), xycoords=("axes fraction", "data"), xytext=(1.012, y_text), textcoords=("axes fraction", "data"),  # leader from line to label
+                    fontsize=6.5, color=col, va="center", ha="left", annotation_clip=False,  # small coloured text
+                    arrowprops={"arrowstyle": "-", "color": col, "linewidth": 0.5, "shrinkA": 0, "shrinkB": 0})  # thin leader line
+    ax.plot(xs, ys, color="black", linewidth=2.2, marker="o", markersize=3.5, zorder=5)  # the pilot's line
+    alive_years = [x for x, y in zip(xs, ys) if not np.isnan(y)]  # years the pilot is still on the list
+    if alive_years and alive_years[-1] < xs[-1]:  # he retires before Present+25
+        last = alive_years[-1]  # last year on the list
+        ax.annotate(f"retires {last + 1}", xy=(last, ys[xs.index(last)]), xytext=(6, 8), textcoords="offset points", fontsize=7, color="black")  # note
+    ax.set_xlim(xs[0] - 0.6, xs[-1] + 0.6)  # Present to Present+25 (small margin so the end points are visible)
+    ax.set_ylim(-2, 102)  # percentile scale (a little head-room)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))  # whole years only
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}%"))  # show the ticks as percentages
+    ax.set_xlabel("Year")  # x-axis title
+    ax.set_ylabel("Relative Seniority Percentile (100% = most senior)")  # y-axis title
+    ax.grid(axis="y", color="#e9ecef", linewidth=0.6)  # faint guides
+    _style_axes(ax)  # common styling
+
+
+def personal_summary_df(data, idx):  # small table: year and percentile for the display years
+    f = data["future"]  # the future calculations
+    rows = []  # table rows
+    for k in [0] + FUTURE_REPORT_YEARS:  # Present and the six display years
+        v = f["curves"][idx, k]  # percentile that year
+        rows.append({"Year": f["present_year"] + k, "When": "Present" if k == 0 else f"Present+{k}",  # labels
+                     "Relative Seniority Percentile": "retired" if np.isnan(v) else f"{v:.1f}%"})  # value
+    return pd.DataFrame(rows)  # the table
+
+
 def report_category_table_html(data):  # compact table of the categories entered, plus constructive-notice pilots
-    t1 = light_color(data["airline1_color"], 0.6)  # soft tint for airline 1's heading
-    t2 = light_color(data["airline2_color"], 0.6)  # soft tint for airline 2's heading
+    l1, l2 = data["lists"][0], data["lists"][1]  # the two airline lists
+    t1 = light_color(l1["color"], 0.6)  # soft tint for airline 1's heading
+    t2 = light_color(l2["color"], 0.6)  # soft tint for airline 2's heading
     head = (  # heading row
         "<tr><th>Category</th>"  # first heading
-        f"<th style='background:{t1}'>{html.escape(data['airline1_name'])}</th>"  # airline 1 heading
-        f"<th style='background:{t2}'>{html.escape(data['airline2_name'])}</th></tr>"  # airline 2 heading
+        f"<th style='background:{t1}'>{html.escape(l1['name'])}</th>"  # airline 1 heading
+        f"<th style='background:{t2}'>{html.escape(l2['name'])}</th></tr>"  # airline 2 heading
     )  # end head
     body = "".join(  # body rows
         f"<tr><td>{label}</td><td>{v1}</td><td>{v2}</td></tr>"  # one row
@@ -1284,21 +1570,18 @@ def report_category_table_html(data):  # compact table of the categories entered
     return f"<table class='rpt'>{head}{body}</table>"  # the finished table
 
 
-def abridged_html(data):  # scrollable Abridged IPSL; each row tinted with its airline's colour
+def abridged_html(data):  # scrollable Abridged IPSL; each row tinted with its airline's colour (New Hires light grey)
     ab = data["IPSL_Abridged"]  # abridged table
-    tint = {  # row background for each airline
-        data["airline1_code"]: light_color(data["airline1_color"]),  # airline 1
-        data["airline2_code"]: light_color(data["airline2_color"]),  # airline 2
-    }  # end tint
+    tint = airline_tints(data)  # row background for each airline
     parts = [  # start with the heading
         "<div class='ipslwrap'><table class='ipsl'><thead><tr>"  # wrapper, table, heading row
-        "<th>Sen #</th><th>Name</th><th>Airline</th><th>Rank</th><th>Equip</th><th>DOH</th>"  # bold column headings
+        "<th>Sen #</th><th>Name</th><th>Pilot ID</th><th>Airline</th><th>Rank</th><th>Equip</th><th>DOH</th>"  # bold column headings
         "</tr></thead><tbody>"  # start of the body
     ]  # end parts
     for r in ab.itertuples(index=False):  # one row per pilot
         parts.append(  # add the row
             f"<tr style='background:{tint[r.Airline]}'>"  # tinted row
-            f"<td>{r.SenNum}</td><td>{html.escape(str(r.Name))}</td><td>{r.Airline}</td>"  # number, name, airline
+            f"<td>{r.SenNum}</td><td>{html.escape(str(r.Name))}</td><td>{html.escape(str(r.PilotID))}</td><td>{r.Airline}</td>"  # number, name, ID, airline
             f"<td>{r.Rank}</td><td>{r.Equip}</td><td>{r.DOH}</td></tr>"  # rank, equipment, date of hire
         )  # end row
     parts.append("</tbody></table></div>")  # close the table
@@ -1306,32 +1589,39 @@ def abridged_html(data):  # scrollable Abridged IPSL; each row tinted with its a
 
 
 def render_report_page(data):  # draws the whole report
-    a1, a2 = data["airline1_name"], data["airline2_name"]  # airline names
+    single = data["mode"] == "single"  # one airline only?
+    lists = data["lists"]  # the airline lists
 
-    st.title(f"{a1}-{a2} Integrated Pilot Seniority List")  # page title
+    st.title(report_title(data))  # page title
     st.markdown(  # website and e-mail links, regular size, under the title
         f"[{CONTACT_SITE}](https://{CONTACT_SITE}) &nbsp;|&nbsp; [{CONTACT_EMAIL}](mailto:{CONTACT_EMAIL})"  # two hyperlinks
     )  # end markdown
     st.caption(f"Prepared on {data['prepared_at']}")  # date and time of the analysis
 
-    st.subheader("Integration Parameters")  # section heading
-    p1, p2, p3 = st.columns([2, 2, 4])  # parameters | category table | Category Count tables
-    with p1:  # left block
-        st.markdown(  # the parameter lines
-            f"**Status and Category weight:** {data['category_weight_pct']}%  \n"  # category weight
-            f"**Longevity weight:** {data['longevity_weight_pct']}%  \n"  # longevity weight
-            f"**Exclude Inactive Periods:** {'Yes' if data['exclude_inactive'] else 'No'}  \n"  # checkbox
-            f"**Constructive Notice Date:** {data['constructive_notice_date']}  \n"  # notice date
-            f"**Normal Retirement Age:** {data['retirement_age']}"  # retirement age, under the notice date
-        )  # end markdown
-    with p2:  # middle block
-        st.markdown(report_category_table_html(data), unsafe_allow_html=True)  # compact category table
-    with p3:  # right block: the Category Count tables, beside the category table
-        t1, t2 = st.columns(2)  # one table per airline, starting at the very top so they line up with the Category table
-        with t1:  # airline 1
-            st.markdown(count_table_html(data["count_info1"], None, data["airline1_color"], f"Category Count - {a1}"), unsafe_allow_html=True)  # tinted count table with its title inside
-        with t2:  # airline 2
-            st.markdown(count_table_html(data["count_info2"], None, data["airline2_color"], f"Category Count - {a2}"), unsafe_allow_html=True)  # tinted count table with its title inside
+    st.subheader("Parameters" if single else "Integration Parameters")  # section heading
+    if single:  # one airline: retirement age and the Category Count
+        p1, p3 = st.columns([2, 6])  # parameters | Category Count table
+        with p1:  # left block
+            st.markdown(f"**Normal Retirement Age:** {data['retirement_age']}")  # retirement age
+        with p3:  # right block
+            st.markdown(count_table_html(lists[0]["count_info"], None, lists[0]["color"], f"Category Count - {lists[0]['name']}"), unsafe_allow_html=True)  # tinted count table
+    else:  # merger
+        p1, p2, p3 = st.columns([2, 2, 4])  # parameters | category table | Category Count tables
+        with p1:  # left block
+            st.markdown(  # the parameter lines
+                f"**Status and Category weight:** {data['category_weight_pct']}%  \n"  # category weight
+                f"**Longevity weight:** {data['longevity_weight_pct']}%  \n"  # longevity weight
+                f"**Exclude Inactive Periods:** {'Yes' if data['exclude_inactive'] else 'No'}  \n"  # checkbox
+                f"**Constructive Notice Date:** {data['constructive_notice_date']}  \n"  # notice date
+                f"**Normal Retirement Age:** {data['retirement_age']}"  # retirement age, under the notice date
+            )  # end markdown
+        with p2:  # middle block
+            st.markdown(report_category_table_html(data), unsafe_allow_html=True)  # compact category table
+        with p3:  # right block: the Category Count tables, beside the category table
+            t1, t2 = st.columns(2)  # one table per airline
+            for col, lst in zip((t1, t2), lists):  # each airline
+                with col:  # its column
+                    st.markdown(count_table_html(lst["count_info"], None, lst["color"], f"Category Count - {lst['name']}"), unsafe_allow_html=True)  # tinted count table
 
     st.divider()  # thin line
 
@@ -1347,38 +1637,119 @@ def render_report_page(data):  # draws the whole report
     with right:  # right column
         show(draw_dot_chart_airline, dot_size)  # dot chart by airline
 
-    left, right = st.columns(2)  # row 2
-    with left:  # left column
-        show(draw_doh_diff)  # DOH differential
-    with right:  # right column
-        show(draw_relsen_diff)  # relative seniority difference
+    if single:  # ---- one airline: no merger line charts ----
+        left, right = st.columns(2)  # row 2
+        with left:  # left column
+            show(draw_box_plot)  # box plot of positions
+        with right:  # right column
+            show(draw_hire_scatter_post)  # relative seniority vs year of hire
+        left, right = st.columns(2)  # row 3
+        with left:  # left column
+            show(draw_age_distribution)  # pilot age distribution
+        with right:  # right column
+            show(draw_retirement)  # pilot retirements per year
+    else:  # ---- merger ----
+        left, right = st.columns(2)  # row 2
+        with left:  # left column
+            show(draw_doh_diff)  # DOH differential
+        with right:  # right column
+            show(draw_relsen_diff)  # relative seniority difference
 
-    left, right = st.columns(2)  # row 3
-    with left:  # left column
-        show(draw_relsen_variance)  # relative seniority variance
-    with right:  # right column
-        show(draw_box_plot)  # box plot of positions
+        left, right = st.columns(2)  # row 3
+        with left:  # left column
+            show(draw_relsen_variance)  # relative seniority variance
+        with right:  # right column
+            show(draw_box_plot)  # box plot of positions
 
-    left, right = st.columns(2)  # row 4
-    with left:  # left column
-        show(draw_hire_scatter_pre)  # pre-merger relative seniority vs year of hire
-    with right:  # right column
-        show(draw_hire_scatter_post)  # post-merger relative seniority vs year of hire
+        left, right = st.columns(2)  # row 4
+        with left:  # left column
+            show(draw_hire_scatter_pre)  # pre-merger relative seniority vs year of hire
+        with right:  # right column
+            show(draw_hire_scatter_post)  # post-merger relative seniority vs year of hire
 
-    left, right = st.columns(2)  # row 5, below the relative seniority vs year of hire charts
-    with left:  # left column
-        show(draw_age_distribution)  # pilot age distribution
-    with right:  # right column
-        show(draw_retirement)  # pilot retirements per year
+        left, right = st.columns(2)  # row 5, below the relative seniority vs year of hire charts
+        with left:  # left column
+            show(draw_age_distribution)  # pilot age distribution
+        with right:  # right column
+            show(draw_retirement)  # pilot retirements per year
 
     st.subheader("Abridged IPSL")  # section heading, below all charts
     st.markdown(abridged_html(data), unsafe_allow_html=True)  # tinted, scrollable table
 
 
+def render_future_page(data, k):  # dot charts and Abridged IPSL for Present+k (opens in its own tab)
+    f = data["future"]  # all future calculations
+    if k not in f["years"]:  # not one of the six display years
+        st.error("That future year is not available.")  # explain
+        return  # nothing more to draw
+    view = future_view_data(data, k)  # the future list in the shape the chart code expects
+    info = f["years"][k]  # this year's list and counts
+    st.title(f"{list_label(data)} Future Seniority List - {year_label(data, k)}")  # page title
+    st.markdown(  # website and e-mail links
+        f"[{CONTACT_SITE}](https://{CONTACT_SITE}) &nbsp;|&nbsp; [{CONTACT_EMAIL}](mailto:{CONTACT_EMAIL})"  # two hyperlinks
+    )  # end markdown
+    st.caption(f"Prepared on {data['prepared_at']}")  # date and time of the analysis
+    st.markdown(  # what the list contains
+        f"Pilots reaching Normal Retirement Age ({data['retirement_age']}) by {f['present_year'] + k} have been removed. "  # retirements
+        f"New Hire placeholder pilots (light grey) were added at the bottom to cover retirements and the entered growth: "  # New Hires
+        f"**{info['n_new']}** New Hires on a list of **{len(view['IPSL'])}** pilots."  # counts
+    )  # end markdown
+    dot_size = dot_chart_figsize(view)  # figure size for the dot charts
+    left, right = st.columns(2)  # two dot charts side by side
+    with left:  # left column
+        fig = _fig_for(draw_dot_chart, view, dot_size)  # dot chart by rank and equipment
+        st.pyplot(fig)  # display it
+        plt.close(fig)  # free memory
+    with right:  # right column
+        fig = _fig_for(draw_dot_chart_airline, view, dot_size)  # dot chart by airline
+        st.pyplot(fig)  # display it
+        plt.close(fig)  # free memory
+    st.subheader("Abridged IPSL")  # section heading
+    st.markdown(abridged_html(view), unsafe_allow_html=True)  # tinted, scrollable table
+
+
+def render_personal_page(data, pilot_text):  # Personalized Seniority Prediction (opens in its own tab)
+    f = data["future"]  # all future calculations
+    pid = normalize_pilot_id(pilot_text)  # what was typed, tidied
+    st.title("Personalized Seniority Prediction")  # page title
+    st.caption(f"Prepared on {data['prepared_at']}  |  {list_label(data)}")  # date and list name(s)
+    if pid not in f["id_index"]:  # no such pilot
+        st.error(f"Pilot ID '{pid}' was not found on the IPSL.")  # explain
+        return  # nothing more to draw
+    idx = f["id_index"][pid]  # row of this pilot on today's IPSL
+    row = data["IPSL"].iloc[idx]  # his row
+    st.markdown(  # who this is
+        f"**{row['FirstName']} {row['LastName']}**  ({pid})  -  Seniority number {int(row['SenNum'])}, "  # name, ID, number
+        f"{row['Equip']} {row['Rank']}, {airline_label(data, row['Airline'])}"  # position and airline
+    )  # end markdown
+    fig, ax = plt.subplots(figsize=(11, 5.8))  # wide figure (room for the line labels on the right)
+    draw_personal(ax, data, idx)  # the graph
+    ax.set_title("Relative Seniority Percentile by Year  (dotted = position minimum, dashed = bottom 10% of position)", fontsize=9)  # title
+    fig.subplots_adjust(left=0.07, right=0.80, top=0.93, bottom=0.10)  # leave room for the labels
+    st.pyplot(fig)  # display it
+    plt.close(fig)  # free memory
+    st.markdown(  # how to read it
+        "The percentile is the pilot's place on each year's list, which includes the New Hire pilots added for retirements and growth. "  # explanation 1
+        "100% is the most senior pilot. The horizontal lines are the count-weighted position minimum and bottom-10% levels from today's list."  # explanation 2
+    )  # end markdown
+    st.dataframe(personal_summary_df(data, idx), hide_index=True)  # year-by-year values
+
+
 _query_report_id = st.query_params.get("report_id")  # id in the web address, if this tab was opened as a report
 if _query_report_id:  # this tab is a report tab
     if _query_report_id in REPORT_CACHE:  # the report is still held in memory
-        render_report_page(REPORT_CACHE[_query_report_id])  # draw it
+        _view = st.query_params.get("view", "report")  # which page: report | future | personal
+        _data = REPORT_CACHE[_query_report_id]  # the stored results
+        if _view == "future":  # a future-year page
+            try:  # the year comes from the address
+                _k = int(st.query_params.get("year", "2"))  # years from now
+            except ValueError:  # not a number
+                _k = 2  # default
+            render_future_page(_data, _k)  # draw it
+        elif _view == "personal":  # the personalized prediction
+            render_personal_page(_data, st.query_params.get("pilot", ""))  # draw it
+        else:  # the normal integration report
+            render_report_page(_data)  # draw it
     else:  # unknown or expired id
         st.error("Report not found. It may have expired, or this tab was opened from a different app session.")  # explain
     st.stop()  # do not draw the main page in a report tab
@@ -1499,12 +1870,86 @@ def airline_inputs(n, c_name, c_file, c_color):  # the three input boxes for air
     return name, source, hex_color  # everything the rest of the page needs
 
 
+def default_multi_config(codes, start_color_name):  # default name (the code) and colour for each airline code found in one file
+    names = list(COLOR_CHOICES)  # the 12 colour names
+    start = names.index(start_color_name) if start_color_name in names else 0  # begin at the list's own colour
+    return {c: {"name": c, "color": COLOR_CHOICES[names[(start + i) % len(names)]]} for i, c in enumerate(codes)}  # one entry per code
+
+
+@st.dialog("Multiple Airlines Detected", width="large")  # opens as a pop-up box
+def multi_airline_dialog(n, codes, cfg_key, start_color_name):  # asks for a name and colour for every airline code in one file
+    st.markdown(  # explanation
+        f"The Airline column of list {n} contains **{len(codes)}** different codes. "  # how many
+        "Enter the airline name and choose a colour for each one. These colours are used in the charts."  # what to do
+    )  # end markdown
+    names = list(COLOR_CHOICES)  # the 12 colour names
+    default = default_multi_config(codes, start_color_name)  # starting values
+    inverse = {v: k for k, v in COLOR_CHOICES.items()}  # hex -> colour name
+    table = pd.DataFrame({  # the table the user edits
+        "Code": codes,  # airline code (fixed)
+        "Airline name": [default[c]["name"] for c in codes],  # editable name
+        "Colour": [inverse[default[c]["color"]] for c in codes],  # editable colour
+    })  # end table
+    edited = st.data_editor(  # editable table inside the box
+        table, hide_index=True, key=f"multi_editor_{cfg_key}", width="stretch", disabled=["Code"],  # fixed code column
+        column_config={  # column settings
+            "Code": st.column_config.TextColumn("Code"),  # airline code
+            "Airline name": st.column_config.TextColumn("Airline name", required=True, max_chars=40),  # free text
+            "Colour": st.column_config.SelectboxColumn("Colour", options=names, required=True),  # pick one of the 12 colours
+        },  # end column_config
+    )  # end data_editor
+    swatches = " ".join(  # a small colour key under the table
+        f"<span style='background:{hex_c}; color:{_text_color_for(hex_c)}; padding:1px 8px; border-radius:4px; font-size:0.8rem'>{name}</span>"  # one chip
+        for name, hex_c in COLOR_CHOICES.items()  # every colour
+    )  # end swatches
+    st.markdown(swatches, unsafe_allow_html=True)  # show the key
+    if st.button("OK", key=f"multi_ok_{cfg_key}"):  # confirm
+        name_list = [str(x).strip() for x in edited["Airline name"]]  # the names typed
+        colour_list = list(edited["Colour"])  # the colours chosen
+        if any(not x or x.lower() == "nan" for x in name_list):  # a name is missing
+            small_red("Every airline needs a name.")  # explain
+        elif len(set(colour_list)) != len(colour_list):  # two airlines share a colour
+            small_red("Choose a different colour for each airline.")  # explain
+        else:  # all good
+            st.session_state["multi_cfg"][cfg_key] = {  # remember the choices
+                code: {"name": nm, "color": COLOR_CHOICES[col]} for code, nm, col in zip(codes, name_list, colour_list)  # per code
+            }  # end dict
+            st.rerun()  # close the box and redraw the page
+
+
+GROWTH_INFO = (  # text shown in the (i) box beside Future Block Growth
+    "Enter the expected growth in the number of pilots flying each equipment type, as a percentage of today's head count "  # part 1
+    "(for example 10 means 10% more pilots than today). Leave a cell blank if you have no estimate. "  # part 2
+    "Growth is interpolated in a straight line from 0% today to each year you enter, and the head count stays at the last "  # part 3
+    "entered level afterwards. Every year from Present+1 to Present+25 a future seniority list is built: pilots who reach "  # part 4
+    "the Normal Retirement Age are removed, and New Hire placeholder pilots are added at the bottom to replace the retirees "  # part 5
+    "and to reach the head count you entered. With 0% growth only the retirees are replaced. These New Hires are shown in "  # part 6
+    "light grey and are needed to calculate relative seniority correctly in the future."  # part 7
+)  # end of GROWTH_INFO
+
+PILOT_INFO = """
+**Pilot ID**
+
+The Pilot ID is the pilot's name code and seniority number on the present IPSL, as shown in the **Pilot ID** column of the Abridged IPSL.
+
+It is the first 3 letters of the last name, then the first 3 letters of the first name, then the seniority number.
+
+For example, Pilot Patrick Smith with seniority number 853 is **SMIPAT853**.
+
+Capital letters are not required. Run **ANALYZE** first, then enter the Pilot ID and press **Personalized Seniority Prediction**. A link opens a graph of that pilot's Relative Seniority Percentile from the present year to 25 years in the future.
+
+The same Pilot ID is used on every future list, so you can find the same pilot in each year.
+"""  # text shown in the (i) box beside the Pilot ID box
+
+
 # ---------- set the first-run defaults (names, sample lists) before any widget is drawn ----------
 for _n in (1, 2):  # both airlines
     if f"airline{_n}_name" not in st.session_state:  # first run
         st.session_state[f"airline{_n}_name"] = DEFAULT_AIRLINE_NAMES[_n]  # pre-fill the airline name
     if f"use_sample_{_n}" not in st.session_state:  # first run
         st.session_state[f"use_sample_{_n}"] = True  # start with the sample list loaded
+if "multi_cfg" not in st.session_state:  # names/colours chosen in the Multiple Airlines box
+    st.session_state["multi_cfg"] = {}  # none yet
 
 st.title("Pilot Seniority List Integration Tool")  # page title
 
@@ -1521,6 +1966,7 @@ airline1_name, source1, airline1_color = airline_inputs(1, c1_name, c1_file, c1_
 airline2_name, source2, airline2_color = airline_inputs(2, c2_name, c2_file, c2_color)  # airline 2 inputs
 a1_label = airline1_name or "Airline 1"  # name to show (fallback if blank)
 a2_label = airline2_name or "Airline 2"  # name to show (fallback if blank)
+list_meta = {1: (a1_label, airline1_color), 2: (a2_label, airline2_color)}  # list number -> (name, colour)
 
 SenList1 = None  # airline 1's seniority list (None until it loads)
 SenList2 = None  # airline 2's seniority list (None until it loads)
@@ -1529,6 +1975,7 @@ status_bits = []  # short "N pilots loaded" messages
 if source1 is not None:  # a list is available for airline 1
     try:  # read it
         SenList1 = parse_seniority_list(source1)  # parse and enrich
+        SenList1["ListNum"] = 1  # remember which file these pilots came from
         status_bits.append(f"{a1_label}: {len(SenList1)} pilots loaded")  # success message
     except Exception as exc:  # anything wrong with the file
         st.error(f"{a1_label}: {exc}")  # show the problem
@@ -1536,12 +1983,37 @@ if source1 is not None:  # a list is available for airline 1
 if source2 is not None:  # a list is available for airline 2
     try:  # read it
         SenList2 = parse_seniority_list(source2)  # parse and enrich
+        SenList2["ListNum"] = 2  # remember which file these pilots came from
         status_bits.append(f"{a2_label}: {len(SenList2)} pilots loaded")  # success message
     except Exception as exc:  # anything wrong with the file
         st.error(f"{a2_label}: {exc}")  # show the problem
 
+loaded = [(n, df) for n, df in ((1, SenList1), (2, SenList2)) if df is not None]  # the lists that are available
+single_mode = len(loaded) == 1  # exactly one airline file: no merger
+
+# ---------- several airline codes in one file? ask for a name and colour for each ----------
+airlines = []  # every airline code with its name and colour: [{"code", "name", "color", "list_num"}]
+pending_multi = None  # first file that still needs the Multiple Airlines box
+for n, df in loaded:  # each loaded list
+    codes = sorted(df["Airline"].unique())  # the airline codes in this file
+    if len(codes) == 1:  # the normal case: one code
+        airlines.append({"code": codes[0], "name": list_meta[n][0], "color": list_meta[n][1], "list_num": n})  # the list's own name and colour
+    else:  # several codes (for example an airline that has already merged)
+        cfg_key = f"{n}|{','.join(codes)}"  # identifies this file's set of codes
+        chosen = st.session_state["multi_cfg"].get(cfg_key)  # names/colours already confirmed
+        if chosen is None:  # not confirmed yet
+            if pending_multi is None:  # remember the first one
+                pending_multi = (n, codes, cfg_key, st.session_state[f"airline{n}_color_name"])  # arguments for the box
+            chosen = default_multi_config(codes, st.session_state[f"airline{n}_color_name"])  # use defaults until confirmed
+        for c in codes:  # one entry per code
+            airlines.append({"code": c, "name": chosen[c]["name"], "color": chosen[c]["color"], "list_num": n})  # name and colour
+if pending_multi is not None:  # open the box
+    multi_airline_dialog(*pending_multi)  # "Multiple Airlines Detected"
+
 if status_bits:  # at least one list loaded
     st.caption("   |   ".join(status_bits))  # one small line of status
+if single_mode:  # one list only
+    st.caption("One airline list loaded: no merger. Categories, Dot Charts, the Abridged IPSL, the Future lists and the Personalized Seniority Prediction are still available.")  # explain
 
 # ---------- constructive notice date and count ----------
 date_col, date_info, _ = st.columns([1.3, 0.5, 6])  # date box | (i) symbol | spare space
@@ -1552,26 +2024,25 @@ with date_info:  # (i) column
     info_popover("notice", NOTICE_INFO)  # explanation
 
 if st.button("COUNT CATEGORIES"):  # the user wants the Equip / Rank counts
-    if SenList1 is None or SenList2 is None:  # lists missing
-        st.error("Upload both seniority lists before counting categories.")  # explain
-    else:  # both lists loaded
-        st.session_state["count_info1"] = count_categories(SenList1, constructive_notice_date)  # airline 1 counts
-        st.session_state["count_info2"] = count_categories(SenList2, constructive_notice_date)  # airline 2 counts
+    if not loaded:  # no lists
+        st.error("Upload a seniority list before counting categories.")  # explain
+    else:  # at least one list loaded
+        for n, df in loaded:  # each loaded list
+            st.session_state[f"count_info{n}"] = count_categories(df, constructive_notice_date)  # its counts
 
-count_info1 = st.session_state.get("count_info1")  # saved counts for airline 1
-count_info2 = st.session_state.get("count_info2")  # saved counts for airline 2
-count_grand = [None, None]  # grand totals (None until counted)
-if count_info1 is not None and count_info2 is not None:  # counts exist
-    count_grand = [int(count_info1["table"].to_numpy().sum()), int(count_info2["table"].to_numpy().sum())]  # grand totals
+count_infos = {n: st.session_state.get(f"count_info{n}") for n, _df in loaded}  # saved counts for the loaded lists
+counts_ready = bool(loaded) and all(v is not None for v in count_infos.values())  # every loaded list has been counted
+count_grand = {n: int(info["table"].to_numpy().sum()) for n, info in count_infos.items() if info is not None}  # grand totals
 
 # ---------- define integration parameters ----------
 st.divider()  # thin line
 head2_col, head2_info, _ = st.columns([4.2, 0.5, 6])  # heading | (i) symbol | spare space
 with head2_col:  # heading column
-    st.subheader("Define Integration Parameters")  # section heading
-with head2_info:  # (i) column
-    st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)  # nudge down to line up with the heading
-    info_popover("methods", METHODOLOGY_INFO)  # historical integration methodologies
+    st.subheader("Parameters" if single_mode else "Define Integration Parameters")  # section heading
+if not single_mode:  # the methodologies only matter for a merger
+    with head2_info:  # (i) column
+        st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)  # nudge down to line up with the heading
+        info_popover("methods", METHODOLOGY_INFO)  # historical integration methodologies
 
 # The slider runs Status and Category (left, 0) -> Longevity (right, 100), so its value IS the Longevity %.
 longevity_pct = st.session_state.get("integration_weight", 50)  # slider's current value
@@ -1579,98 +2050,134 @@ category_pct = 100 - longevity_pct  # the rest goes to Status and Category
 
 ENTRY_W = [1.3, 1, 1, 1.5]  # category table columns: label | airline 1 | airline 2 | spare
 
+category_counts = {n: {"airline1": 0, "airline2": 0} for n in range(1, 7)}  # numbers typed into the category boxes
+entries_valid = True  # becomes False if a box is not a whole number
+entered = [0, 0]  # totals of the category boxes
+exclude_inactive = False  # checkbox (merger only)
+CategoryWeight = category_pct / 100  # weight on the Status and Category list (0-1)
+LongevityWeight = longevity_pct / 100  # weight on the Longevity list (0-1)
+
 left_half, count_block = st.columns([1, 1])  # left: weighting + category entry | right: Category Count tables (starts level with Weighting)
 with left_half:  # left half
-    # "Weighting" and its (i) sit on one line, close together; the slider is as wide as the two airline columns of the table below
-    w_label, w_slider, _w1 = st.columns([1.3, 2, 1.5])  # label + (i) | slider | spare
-    with w_label:  # label column
-        with st.container(horizontal=True, gap="xxsmall"):  # lay the word and the (i) out on one line with a tiny gap
-            st.markdown("<div style='font-weight:600; line-height:1.6rem;'>Weighting</div>", unsafe_allow_html=True)  # label text
-            info_popover("weight", WEIGHT_INFO)  # explanation, right beside the word
-    with w_slider:  # slider column
-        st.markdown(  # big percentages above the slider
-            "<div style='display:flex; justify-content:space-between; font-size:2rem; font-weight:500;'>"  # left and right ends
-            f"<span>{category_pct}%</span><span>{longevity_pct}%</span></div>",  # Status and Category % | Longevity %
+    if not single_mode:  # ---- merger controls ----
+        # "Weighting" and its (i) sit on one line, close together; the slider is as wide as the two airline columns of the table below
+        w_label, w_slider, _w1 = st.columns([1.3, 2, 1.5])  # label + (i) | slider | spare
+        with w_label:  # label column
+            with st.container(horizontal=True, gap="xxsmall"):  # lay the word and the (i) out on one line with a tiny gap
+                st.markdown("<div style='font-weight:600; line-height:1.6rem;'>Weighting</div>", unsafe_allow_html=True)  # label text
+                info_popover("weight", WEIGHT_INFO)  # explanation, right beside the word
+        with w_slider:  # slider column
+            st.markdown(  # big percentages above the slider
+                "<div style='display:flex; justify-content:space-between; font-size:2rem; font-weight:500;'>"  # left and right ends
+                f"<span>{category_pct}%</span><span>{longevity_pct}%</span></div>",  # Status and Category % | Longevity %
+                unsafe_allow_html=True,  # allow the HTML
+            )  # end markdown
+            st.markdown(  # captions, with a little space below them before the slider
+                "<div style='display:flex; justify-content:space-between; font-size:14px; margin-bottom:0.6rem;'>"  # left and right ends
+                "<span>Status and Category</span><span>Longevity</span></div>",  # the two ends of the slider
+                unsafe_allow_html=True,  # allow the HTML
+            )  # end markdown
+            st.slider(  # the weighting slider
+                "Status and Category \u2194 Longevity",  # accessibility label (hidden)
+                min_value=0, max_value=100, value=50,  # 0-100, starting at 50
+                label_visibility="collapsed",  # hide the label
+                key="integration_weight",  # remembered under this key
+            )  # end slider
+
+        hdr = st.columns(ENTRY_W)  # heading row
+        hdr[0].markdown("<div style='line-height:1.9rem; font-weight:600;'>Category</div>", unsafe_allow_html=True)  # first heading
+        hdr[1].markdown(  # airline 1 name chip
+            f"<div class='catchip' style='background-color:{airline1_color}; color:{_text_color_for(airline1_color)};'>"  # chip colours
+            f"{html.escape(a1_label)}</div>",  # airline name
             unsafe_allow_html=True,  # allow the HTML
         )  # end markdown
-        st.markdown(  # captions, with a little space below them before the slider
-            "<div style='display:flex; justify-content:space-between; font-size:14px; margin-bottom:0.6rem;'>"  # left and right ends
-            "<span>Status and Category</span><span>Longevity</span></div>",  # the two ends of the slider
+        hdr[2].markdown(  # airline 2 name chip
+            f"<div class='catchip' style='background-color:{airline2_color}; color:{_text_color_for(airline2_color)};'>"  # chip colours
+            f"{html.escape(a2_label)}</div>",  # airline name
             unsafe_allow_html=True,  # allow the HTML
         )  # end markdown
-        st.slider(  # the weighting slider
-            "Status and Category \u2194 Longevity",  # accessibility label (hidden)
-            min_value=0, max_value=100, value=50,  # 0-100, starting at 50
-            label_visibility="collapsed",  # hide the label
-            key="integration_weight",  # remembered under this key
-        )  # end slider
+        st.markdown("<div style='height:0.7rem'></div>", unsafe_allow_html=True)  # extra space under the heading row
+        for n in range(1, 7):  # categories 1 to 6
+            row = st.columns(ENTRY_W)  # one row
+            row[0].markdown(f"<div style='line-height:1.5rem;'>Category {n}</div>", unsafe_allow_html=True)  # row label
+            for j, who in enumerate(("airline1", "airline2")):  # both airlines
+                text = row[j + 1].text_input(  # small entry box (same height as the name chip)
+                    f"{who} category {n}", value="0", key=f"cat_{n}_{who}",  # label (hidden), start at 0, remembered key
+                    label_visibility="collapsed", max_chars=6,  # hide label, at most 6 characters
+                )  # end text_input
+                value, ok = parse_count_text(text)  # convert the text to a number
+                category_counts[n][who] = value  # store it
+                entries_valid = entries_valid and ok  # remember any invalid entry
 
-    CategoryWeight = category_pct / 100  # weight on the Status and Category list (0-1)
-    LongevityWeight = longevity_pct / 100  # weight on the Longevity list (0-1)
+        entered, _valid = entered_category_totals()  # totals of the boxes
+        tot_row = st.columns(ENTRY_W)  # totals row
+        tot_row[0].markdown("<div style='line-height:1.9rem; font-weight:700;'>Total</div>", unsafe_allow_html=True)  # label
+        tot_row[1].markdown(f"<div style='text-align:center; font-weight:700;'>{entered[0]}</div>", unsafe_allow_html=True)  # airline 1 total
+        tot_row[2].markdown(f"<div style='text-align:center; font-weight:700;'>{entered[1]}</div>", unsafe_allow_html=True)  # airline 2 total
 
-    category_counts = {n: {"airline1": 0, "airline2": 0} for n in range(1, 7)}  # numbers typed into the category boxes
-    entries_valid = True  # becomes False if a box is not a whole number
+        if not entries_valid:  # a box holds something other than a whole number
+            small_red("Category boxes must contain whole numbers.")  # explain
+        for who_label, total_entered, needed in ((a1_label, entered[0], count_grand.get(1)), (a2_label, entered[1], count_grand.get(2))):  # each airline
+            if needed is not None and total_entered != needed:  # counts exist and disagree with the boxes
+                small_red(f"{html.escape(who_label)}: categories add up to {total_entered}, but the count is {needed}.")  # explain
 
-    hdr = st.columns(ENTRY_W)  # heading row
-    hdr[0].markdown("<div style='line-height:1.9rem; font-weight:600;'>Category</div>", unsafe_allow_html=True)  # first heading
-    hdr[1].markdown(  # airline 1 name chip
-        f"<div class='catchip' style='background-color:{airline1_color}; color:{_text_color_for(airline1_color)};'>"  # chip colours
-        f"{html.escape(a1_label)}</div>",  # airline name
-        unsafe_allow_html=True,  # allow the HTML
-    )  # end markdown
-    hdr[2].markdown(  # airline 2 name chip
-        f"<div class='catchip' style='background-color:{airline2_color}; color:{_text_color_for(airline2_color)};'>"  # chip colours
-        f"{html.escape(a2_label)}</div>",  # airline name
-        unsafe_allow_html=True,  # allow the HTML
-    )  # end markdown
-    st.markdown("<div style='height:0.7rem'></div>", unsafe_allow_html=True)  # extra space under the heading row
-    for n in range(1, 7):  # categories 1 to 6
-        row = st.columns(ENTRY_W)  # one row
-        row[0].markdown(f"<div style='line-height:1.5rem;'>Category {n}</div>", unsafe_allow_html=True)  # row label
-        for j, who in enumerate(("airline1", "airline2")):  # both airlines
-            text = row[j + 1].text_input(  # small entry box (same height as the name chip)
-                f"{who} category {n}", value="0", key=f"cat_{n}_{who}",  # label (hidden), start at 0, remembered key
-                label_visibility="collapsed", max_chars=6,  # hide label, at most 6 characters
-            )  # end text_input
-            value, ok = parse_count_text(text)  # convert the text to a number
-            category_counts[n][who] = value  # store it
-            entries_valid = entries_valid and ok  # remember any invalid entry
-
-    entered, _valid = entered_category_totals()  # totals of the boxes
-    tot_row = st.columns(ENTRY_W)  # totals row
-    tot_row[0].markdown("<div style='line-height:1.9rem; font-weight:700;'>Total</div>", unsafe_allow_html=True)  # label
-    tot_row[1].markdown(f"<div style='text-align:center; font-weight:700;'>{entered[0]}</div>", unsafe_allow_html=True)  # airline 1 total
-    tot_row[2].markdown(f"<div style='text-align:center; font-weight:700;'>{entered[1]}</div>", unsafe_allow_html=True)  # airline 2 total
-
-    if not entries_valid:  # a box holds something other than a whole number
-        small_red("Category boxes must contain whole numbers.")  # explain
-    for who_label, total_entered, needed in ((a1_label, entered[0], count_grand[0]), (a2_label, entered[1], count_grand[1])):  # each airline
-        if needed is not None and total_entered != needed:  # counts exist and disagree with the boxes
-            small_red(f"{html.escape(who_label)}: categories add up to {total_entered}, but the count is {needed}.")  # explain
-
-    check_col, check_info, _ = st.columns([2, 0.6, 2])  # checkbox | (i) symbol | spare space
-    with check_col:  # checkbox column
-        exclude_inactive = st.checkbox("Exclude Inactive Periods")  # ignore inactivity in the longevity list
-    with check_info:  # (i) column
-        info_popover("inactive", INACTIVE_INFO)  # explanation
+        check_col, check_info, _ = st.columns([2, 0.6, 2])  # checkbox | (i) symbol | spare space
+        with check_col:  # checkbox column
+            exclude_inactive = st.checkbox("Exclude Inactive Periods")  # ignore inactivity in the longevity list
+        with check_info:  # (i) column
+            info_popover("inactive", INACTIVE_INFO)  # explanation
 
     ra_col, _ = st.columns([1.3, 2.7])  # narrow box for the retirement age
     with ra_col:  # box column
-        retirement_age = st.text_input("Normal Retirement Age", value=DEFAULT_RETIREMENT_AGE, key="retirement_age", max_chars=3)  # not used yet
+        retirement_age = st.text_input("Normal Retirement Age", value=DEFAULT_RETIREMENT_AGE, key="retirement_age", max_chars=3)  # used for retirements and the future lists
     retirement_ok = retirement_age.strip().isdigit()  # must be a whole number
     if not retirement_ok:  # not a whole number
         small_red("Normal Retirement Age must be a whole number.")  # explain
 
 with count_block:  # right half
-    if count_info1 is not None and count_info2 is not None:  # counts exist
+    if counts_ready:  # counts exist
         st.markdown("<div style='font-size:1.2rem; font-weight:700;'>Category Count</div>", unsafe_allow_html=True)  # title above the tables
-        t_left, t_right = st.columns(2)  # one table per airline
-        with t_left:  # airline 1 table
-            st.markdown(f"**{a1_label}**")  # airline name
-            st.markdown(count_table_html(count_info1, entered[0], airline1_color), unsafe_allow_html=True)  # tinted count table
-        with t_right:  # airline 2 table
-            st.markdown(f"**{a2_label}**")  # airline name
-            st.markdown(count_table_html(count_info2, entered[1], airline2_color), unsafe_allow_html=True)  # tinted count table
+        for col, (n, _df) in zip(st.columns(len(loaded)), loaded):  # one table per loaded airline
+            with col:  # its column
+                st.markdown(f"**{list_meta[n][0]}**")  # airline name
+                st.markdown(count_table_html(count_infos[n], None if single_mode else entered[n - 1], list_meta[n][1]), unsafe_allow_html=True)  # tinted count table
+
+# ---------- Future Block Growth (above the ANALYZE / EXPORT buttons) ----------
+growth = {}  # Equip -> {3: %, 5: %, 10: %} (None where blank)
+g_head, g_info, _g_rest = st.columns([2.5, 0.5, 7])  # heading | (i) symbol | spare space
+with g_head:  # heading column
+    st.subheader("Future Block Growth")  # section heading
+with g_info:  # (i) column
+    st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)  # nudge down to line up with the heading
+    info_popover("growth", GROWTH_INFO)  # explanation
+growth_left, _growth_right = st.columns([1, 1])  # the table uses the left half of the page
+with growth_left:  # left half
+    if not counts_ready:  # the Equip list comes from COUNT CATEGORIES
+        st.caption("Press COUNT CATEGORIES to list the equipment types, then enter the expected growth.")  # explain
+    else:  # equipment types are known
+        equips_all = sorted({e for _n, df in loaded for e in df["Equip"].unique()})  # every Equip from all airlines
+        now_counts = pd.concat([df["Equip"] for _n, df in loaded]).value_counts()  # pilots per Equip today (constructive-notice pilots included)
+        growth_cols = {y: f"+{y} years" for y in GROWTH_YEARS}  # column names
+        base_df = pd.DataFrame({"Equip": equips_all, "Pilots now": [int(now_counts.get(e, 0)) for e in equips_all]})  # first columns
+        for y in GROWTH_YEARS:  # one empty column per horizon
+            base_df[growth_cols[y]] = pd.Series([np.nan] * len(equips_all), dtype="float64")  # blank cells to fill in
+        edited_growth = st.data_editor(  # editable table
+            base_df, hide_index=True, width="stretch", key="growth_editor_" + "_".join(equips_all),  # a new Equip list starts a new table
+            disabled=["Equip", "Pilots now"],  # only the growth cells can be edited
+            column_config={  # column settings
+                "Equip": st.column_config.TextColumn("Equip"),  # equipment
+                "Pilots now": st.column_config.NumberColumn("Pilots now", format="%d"),  # head count today
+                **{growth_cols[y]: st.column_config.NumberColumn(f"+{y} years (%)", min_value=-100.0, max_value=1000.0, step=0.1, format="%.1f")  # percent growth
+                   for y in GROWTH_YEARS},  # end of the growth columns
+            },  # end column_config
+        )  # end data_editor
+        for _i, r in edited_growth.iterrows():  # read the entries
+            growth[r["Equip"]] = {y: (None if pd.isna(r[growth_cols[y]]) else float(r[growth_cols[y]])) for y in GROWTH_YEARS}  # blank -> None
+        now_total = int(sum(int(now_counts.get(e, 0)) for e in equips_all))  # pilots today
+        targets = {y: sum(target_headcount(int(now_counts.get(e, 0)), growth.get(e, {}), y) for e in equips_all) for y in GROWTH_YEARS}  # head count at each horizon
+        st.caption(  # quick check of the entries
+            f"Head count (before retirements): today {now_total}  |  +3 years {targets[3]}  |  +5 years {targets[5]}  |  +10 years {targets[10]}"  # totals
+        )  # end caption
 
 # ANALYZE / EXPORT share the width of the parameters block (about half the screen)
 button_block, _ = st.columns([1, 1])  # left half
@@ -1680,18 +2187,49 @@ with button_block:  # left half
         analyze_clicked = st.button("ANALYZE", width="stretch")  # run the integration
     with btn_right:  # right button
         export_clicked = st.button("EXPORT", width="stretch")  # export the results
+    pid_col, pid_info = st.columns([5, 1])  # Pilot ID box | (i) symbol
+    with pid_col:  # box column
+        pilot_id_text = st.text_input("Pilot ID", key="pilot_id_input", placeholder="e.g. SMIPAT853", max_chars=24)  # which pilot to predict
+    with pid_info:  # (i) column
+        st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)  # nudge down to line up with the box
+        info_popover("pilot", PILOT_INFO)  # explanation
+    personal_clicked = st.button("Personalized Seniority Prediction", width="stretch")  # open the pilot's prediction
 
 # ======================================================================
 # Analyze
 # ======================================================================
 if analyze_clicked:  # the user pressed ANALYZE
-    if SenList1 is None or SenList2 is None:  # lists missing
-        st.error("Upload both seniority lists before running Analyze.")  # explain
-    elif not entries_valid:  # bad category entries
-        st.error("Category boxes must contain whole numbers.")  # explain
+    if not loaded:  # lists missing
+        st.error("Upload at least one seniority list before running Analyze.")  # explain
     elif not retirement_ok:  # bad retirement age
         st.error("Normal Retirement Age must be a whole number.")  # explain
-    elif SenList1["Airline"].iloc[0] == SenList2["Airline"].iloc[0]:  # same airline code in both files
+    elif single_mode:  # ---- one airline: no merger ----
+        try:  # build the report data
+            n_only, ListOnly = loaded[0]  # the one list
+            IPSL = Create_IPSL_Single(ListOnly)  # the list itself, in its own order
+            report_data = {  # everything the report tab and the export need
+                "mode": "single",  # no merger
+                "IPSL": IPSL,  # full list
+                "IPSL_Abridged": Create_IPSL_Abridged(IPSL),  # short list
+                "lists": [{"num": n_only, "name": list_meta[n_only][0], "color": list_meta[n_only][1],  # list name and colour
+                           "count_info": count_infos.get(n_only) or count_categories(ListOnly, constructive_notice_date), "n_notice": 0}],  # its counts
+                "airlines": airlines,  # every airline code with its name and colour
+                "prepared_at": datetime.now().strftime("%Y-%m-%d %H:%M"),  # when the analysis ran
+                "retirement_age": retirement_age.strip(),  # Normal Retirement Age
+                "constructive_notice_date": str(constructive_notice_date),  # cut-off date (not used for one airline)
+            }  # end report_data
+            report_data["future"] = build_future(IPSL, growth, int(retirement_age), datetime.now().year)  # future lists and curves
+            report_id = str(uuid.uuid4())  # unique id for this report
+            REPORT_CACHE[report_id] = report_data  # let the new tabs fetch it
+            st.session_state["report_id"] = report_id  # remember the link
+            st.session_state["report_data"] = report_data  # remember the data for EXPORT
+            st.session_state.pop("export_files", None)  # forget any earlier export
+            st.success("Analysis complete.")  # tell the user
+        except ValueError as exc:  # a check inside the analysis failed
+            st.error(str(exc))  # show it
+    elif not entries_valid:  # bad category entries
+        st.error("Category boxes must contain whole numbers.")  # explain
+    elif set(SenList1["Airline"].unique()) & set(SenList2["Airline"].unique()):  # a code appears in both files
         st.error("Both lists use the same Airline code. Each airline needs its own 3-letter code.")  # explain
     else:  # inputs look sensible
         notice_ts = pd.Timestamp(constructive_notice_date)  # cut-off date as a timestamp
@@ -1731,14 +2269,14 @@ if analyze_clicked:  # the user pressed ANALYZE
                 IPSL_Abridged = Create_IPSL_Abridged(IPSL)  # short version
 
                 report_data = {  # everything the report tab and the export need
+                    "mode": "merger",  # two airlines
                     "IPSL": IPSL,  # full list
                     "IPSL_Abridged": IPSL_Abridged,  # short list
-                    "airline1_name": a1_label,  # airline 1 name
-                    "airline2_name": a2_label,  # airline 2 name
-                    "airline1_color": airline1_color,  # airline 1 colour
-                    "airline2_color": airline2_color,  # airline 2 colour
-                    "airline1_code": SenList1["Airline"].iloc[0],  # airline 1 code
-                    "airline2_code": SenList2["Airline"].iloc[0],  # airline 2 code
+                    "lists": [  # the two airline lists
+                        {"num": 1, "name": a1_label, "color": airline1_color, "count_info": count_categories(SenList1, constructive_notice_date), "n_notice": len(ConstNotice1)},  # list 1
+                        {"num": 2, "name": a2_label, "color": airline2_color, "count_info": count_categories(SenList2, constructive_notice_date), "n_notice": len(ConstNotice2)},  # list 2
+                    ],  # end lists
+                    "airlines": airlines,  # every airline code with its name and colour
                     "prepared_at": datetime.now().strftime("%Y-%m-%d %H:%M"),  # when the analysis ran
                     "category_counts": category_counts,  # category boxes
                     "n_notice": len(ConstNoticeList),  # all constructive-notice pilots
@@ -1748,10 +2286,9 @@ if analyze_clicked:  # the user pressed ANALYZE
                     "longevity_weight_pct": longevity_pct,  # Longevity weight (%)
                     "exclude_inactive": exclude_inactive,  # checkbox
                     "constructive_notice_date": str(constructive_notice_date),  # cut-off date
-                    "retirement_age": retirement_age.strip(),  # Normal Retirement Age (not used yet)
-                    "count_info1": count_categories(SenList1, constructive_notice_date),  # airline 1 Category Count table
-                    "count_info2": count_categories(SenList2, constructive_notice_date),  # airline 2 Category Count table
+                    "retirement_age": retirement_age.strip(),  # Normal Retirement Age
                 }  # end report_data
+                report_data["future"] = build_future(IPSL, growth, int(retirement_age), datetime.now().year)  # future lists and curves
                 report_id = str(uuid.uuid4())  # unique id for this report
                 REPORT_CACHE[report_id] = report_data  # let the new tab fetch it
                 st.session_state["report_id"] = report_id  # remember the link
@@ -1761,12 +2298,39 @@ if analyze_clicked:  # the user pressed ANALYZE
             except ValueError as exc:  # a check inside the analysis failed
                 st.error(str(exc))  # show it
 
+# ---------- Personalized Seniority Prediction button ----------
+if personal_clicked:  # the user pressed the button
+    _rd = st.session_state.get("report_data")  # results of the last ANALYZE
+    if _rd is None:  # nothing analysed yet
+        st.warning("Run ANALYZE first, then press Personalized Seniority Prediction.")  # explain
+    elif not normalize_pilot_id(pilot_id_text):  # empty box
+        st.warning("Enter a Pilot ID, for example SMIPAT853 (press the \u24d8 beside the box for help).")  # explain
+    elif normalize_pilot_id(pilot_id_text) not in _rd["future"]["id_index"]:  # no such pilot
+        st.session_state.pop("personal_pid", None)  # forget any earlier pilot
+        st.error(f"Pilot ID '{normalize_pilot_id(pilot_id_text)}' was not found. Use the Pilot ID column of the Abridged IPSL (press the \u24d8 beside the box for help).")  # explain
+    else:  # found
+        st.session_state["personal_pid"] = normalize_pilot_id(pilot_id_text)  # remember the pilot
+
 if st.session_state.get("report_id"):  # an analysis has been run
+    _rid = st.session_state["report_id"]  # the report id
+    _rd = st.session_state["report_data"]  # its data
     st.markdown(  # link that opens the report in a new tab
-        f'<a href="?report_id={st.session_state["report_id"]}" target="_blank" '  # address with the report id
+        f'<a href="?report_id={_rid}" target="_blank" '  # address with the report id
         f'style="font-size:1.05rem; font-weight:600;">Open the integration report in a new tab &#8599;</a>',  # link text
         unsafe_allow_html=True,  # allow the HTML
     )  # end markdown
+    _P = _rd["future"]["present_year"]  # present year
+    _links = " &nbsp;|&nbsp; ".join(  # one link per future year
+        f'<a href="?report_id={_rid}&view=future&year={k}" target="_blank">Present+{k} ({_P + k}) &#8599;</a>' for k in FUTURE_REPORT_YEARS  # opens in its own tab
+    )  # end links
+    st.markdown(f"<div style='font-size:1.0rem;'><b>Future dot charts and Abridged IPSLs</b> (each opens in a new tab): {_links}</div>", unsafe_allow_html=True)  # the row of links
+    _pid = st.session_state.get("personal_pid")  # pilot chosen with the button
+    if _pid and _pid in _rd["future"]["id_index"]:  # still valid for this analysis
+        st.markdown(  # link to the personalized graph
+            f'<a href="?report_id={_rid}&view=personal&pilot={_pid}" target="_blank" '  # address with the pilot
+            f'style="font-size:1.05rem; font-weight:600;">Open the Personalized Seniority Prediction for {_pid} in a new tab &#8599;</a>',  # link text
+            unsafe_allow_html=True,  # allow the HTML
+        )  # end markdown
 
 # ======================================================================
 # Export (password protected)
@@ -1783,10 +2347,10 @@ if export_clicked:  # the user pressed EXPORT
         export_password_dialog()  # ask for the password
 
 if export_authorized:  # a correct password was just entered
-    with st.spinner("Preparing export files..."):  # show progress
-        export_files = build_export_files(st.session_state["report_data"])  # build the CSV and PDF
+    with st.spinner("Preparing export files (the future lists take a little longer)..."):  # show progress
+        export_files = build_export_files(st.session_state["report_data"])  # build the CSVs and PDFs
     st.session_state["export_files"] = export_files  # keep them for the fallback links
-    run_download_script(auto_download_html(export_files))  # make the browser save both files
+    run_download_script(auto_download_html(export_files))  # make the browser save the files
 
 if st.session_state.get("export_files"):  # files have been exported
     st.caption("Export ready. If your browser did not save the files automatically, click a file name:")  # fallback note
