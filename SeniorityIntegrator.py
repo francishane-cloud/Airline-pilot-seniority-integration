@@ -54,6 +54,10 @@ st.markdown(  # inject one <style> block into the page
     [class*="st-key-info_"] button p { font-size: 1.25rem !important; font-weight: 700 !important; color: #1c83e1 !important; }
     [class*="st-key-info_"] button [data-testid="stIconMaterial"],
     [class*="st-key-colorpop_"] button [data-testid="stIconMaterial"] { display: none; }
+    [class*="st-key-row_btn_"], [class*="st-key-row_btn_"] > div { height: 2.75rem !important; max-height: 2.75rem !important; }
+    [class*="st-key-row_btn_"] button { min-height: 2.75rem !important; height: 2.75rem !important; max-height: 2.75rem !important; padding: 0 0.3rem !important; overflow: hidden !important; box-sizing: border-box !important; }
+    [class*="st-key-row_btn_"] button div, [class*="st-key-row_btn_"] button [data-testid="stMarkdownContainer"] { margin: 0 !important; padding: 0 !important; }
+    [class*="st-key-row_btn_"] button p { line-height: 0.95 !important; margin: 0 !important; padding: 0 !important; }
     [class*="st-key-rm_sample_"] button { padding: 0 0.3rem !important; min-height: 1.5rem !important; height: 1.5rem !important; }
     [class*="st-key-rm_sample_"] button p { font-size: 0.9rem !important; font-weight: 700 !important; letter-spacing: 0 !important; }
     [class*="st-key-cat_"] [data-testid="stTextInputRootElement"], [class*="st-key-cat_"] [data-baseweb="input"],
@@ -787,6 +791,7 @@ def draw_dot_chart(ax, data):  # dot chart coloured by each pilot's airline + ra
         r, c = divmod(i, cols)  # row and column of this pilot's square
         grid[r, c] = grey if flags[i] else rgb[key]  # light grey for New Hires, otherwise airline/rank/equipment colour
     _draw_dot_grid(ax, grid, cols, rows, "Dot Chart by Rank and Equipment")  # paint the grid
+    _add_dot_scale(ax, len(IPSL), cols)  # pilot counts on the left, relative seniority on the right
 
     sets = []  # one legend per airline (plus one for New Hires)
     for a in data["airlines"]:  # each airline
@@ -820,6 +825,7 @@ def draw_dot_chart_airline(ax, data):  # dot chart with one colour per airline; 
         else:  # existing pilot
             grid[r, c] = light_rgb[airline] if notice[i] else main_rgb[airline]  # lighter for constructive notice
     _draw_dot_grid(ax, grid, cols, rows, "Dot Chart by Airline")  # paint the grid
+    _add_dot_scale(ax, total, cols)  # pilot counts on the left, relative seniority on the right
 
     handles, labels = [], []  # legend entries
     for a in data["airlines"]:  # each airline
@@ -865,6 +871,21 @@ def _draw_dot_grid(ax, grid, cols, rows, title):  # draws a colour grid with thi
     for spine in ax.spines.values():  # every border
         spine.set_visible(False)  # hide it
     ax.set_title(title, fontsize=9)  # chart title
+
+
+def _add_dot_scale(ax, total, cols):  # small numbers beside a dot chart: pilots every 250 on the left, relative seniority every 5% on the right
+    left = ax.get_yaxis_transform()  # x in axes fraction, y in data (row) units
+    k = 250  # first label
+    while k <= total:  # one label per 250 pilots (the row boundary after the k-th pilot)
+        y = k / cols - 0.5  # row boundary
+        ax.plot([-0.012, 0.0], [y, y], transform=left, color="#666666", linewidth=0.5, clip_on=False)  # tiny tick
+        ax.text(-0.016, y, str(k), transform=left, ha="right", va="center", fontsize=4.5, color="#444444", clip_on=False)  # pilot count
+        k += 250  # next label
+    for p in range(100, -1, -5):  # relative seniority percentiles 100, 95, ... 0
+        i = (total - 1) * (1 - p / 100.0)  # position of the pilot at that percentile (0 = most senior)
+        y = (i + 0.5) / cols - 0.5  # his row position
+        ax.plot([1.0, 1.012], [y, y], transform=left, color="#666666", linewidth=0.5, clip_on=False)  # tiny tick
+        ax.text(1.016, y, f"{p}%", transform=left, ha="left", va="center", fontsize=4.5, color="#444444", clip_on=False)  # percentile
 
 
 def _draw_median(ax, value, color, unit=""):  # dashed horizontal line at a median, with its value beside it
@@ -942,6 +963,7 @@ def draw_box_plot(ax, data):  # vertical box plot of seniority numbers by airlin
         box_data,  # data for each box
         positions=positions,  # x position of each box
         widths=0.7,  # wider boxes
+        whis=(1, 99),  # whiskers end at the 1st and 99th percentile; points beyond them are drawn as circles
         patch_artist=True,  # allow filled boxes
         medianprops={"color": "black", "linewidth": 1.6},  # centre line = median
         boxprops={"linewidth": 0.8},  # box edges = lower and upper quartiles
@@ -966,7 +988,7 @@ def draw_box_plot(ax, data):  # vertical box plot of seniority numbers by airlin
     for pos, vals in zip(positions, box_data):  # each box
         if len(vals) == 0:  # empty group
             continue  # nothing to label
-        mn = float(vals.max())  # bottom whisker end = lowest relative seniority
+        mn = float(np.percentile(vals, 99))  # bottom whisker end = 1st percentile of relative seniority
         q1 = float(np.percentile(vals, 75))  # bottom edge of the box
         md = float(np.median(vals))  # median
         ax.plot([pos - 0.12, pos + 0.12], [mn, mn], color="black", linewidth=1)  # short tick marking the bottom value
@@ -1217,9 +1239,9 @@ def build_pdf_bytes(data):  # the report as a multi-page PDF (bytes)
             for (row, col), cell in ctbl.get_celld().items():  # every cell
                 if row == 0:  # the heading row
                     cell.set_text_props(weight="bold")  # bold headings
-        ax1 = fig.add_axes([0.04, 0.14, 0.45, 0.46])  # left dot chart area
+        ax1 = fig.add_axes([0.05, 0.14, 0.43, 0.46])  # left dot chart area
         draw_dot_chart(ax1, data)  # dot chart by rank and equipment
-        ax2 = fig.add_axes([0.53, 0.14, 0.45, 0.46])  # right dot chart area
+        ax2 = fig.add_axes([0.55, 0.14, 0.43, 0.46])  # right dot chart area
         draw_dot_chart_airline(ax2, data)  # dot chart by airline
         pdf.savefig(fig)  # write page 1
         plt.close(fig)  # free memory
@@ -1282,9 +1304,9 @@ def build_future_pdf_bytes(data, k):  # dot charts + Abridged IPSL for Present+k
             cells = ["" if gp.get(y) is None or pd.isna(gp.get(y)) else f"{gp[y]:+g}%" for y in GROWTH_YEARS]  # +3, +5, +10
             g_lines.append(f"  {e}:  +3 yrs {cells[0] or '-'}   +5 yrs {cells[1] or '-'}   +10 yrs {cells[2] or '-'}")  # one line per Equip
         fig.text(0.62, 0.872, "\n".join(g_lines[:14]), fontsize=7.5, va="top", linespacing=1.4, family="DejaVu Sans Mono")  # compact list
-        ax1 = fig.add_axes([0.04, 0.18, 0.45, 0.50])  # left dot chart area
+        ax1 = fig.add_axes([0.05, 0.17, 0.43, 0.54])  # left dot chart area
         draw_dot_chart(ax1, view)  # dot chart by rank and equipment
-        ax2 = fig.add_axes([0.53, 0.18, 0.45, 0.50])  # right dot chart area
+        ax2 = fig.add_axes([0.55, 0.17, 0.43, 0.54])  # right dot chart area
         draw_dot_chart_airline(ax2, view)  # dot chart by airline
         pdf.savefig(fig)  # write page 1
         plt.close(fig)  # free memory
@@ -1331,15 +1353,16 @@ def build_ipsl_pdf_bytes(data):  # the FULL IPSL as a landscape PDF, every row t
 def build_export_files(data):  # all export files: (file name, mime type, bytes)
     stamp = export_stamp()  # date-time stamp for the file names
     base = "-".join(_safe(l["name"]) for l in data["lists"])  # "Airline1-Airline2" (or one name)
-    files = [  # Present
-        (f"{base} IPSL Present {stamp}.csv", "text/csv", build_ipsl_csv_bytes(data)),  # full IPSL as CSV
-        (f"{base} IPSL Present {stamp}.pdf", "application/pdf", build_ipsl_pdf_bytes(data)),  # full IPSL as PDF
-        (f"{base} integration data Present {stamp}.pdf", "application/pdf", build_pdf_bytes(data)),  # report (dot charts, charts, Abridged IPSL) as PDF
+    year0 = data["future"]["present_year"] if data.get("future") else datetime.now().year  # the integration year
+    files = [  # Present = the integration year
+        (f"{base} IPSL Present ({year0}) {stamp}.csv", "text/csv", build_ipsl_csv_bytes(data)),  # full IPSL as CSV
+        (f"{base} integration report, dot charts and Abridged IPSL Present ({year0}) {stamp}.pdf", "application/pdf", build_pdf_bytes(data)),  # report (dot charts, charts, Abridged IPSL) as PDF
+        (f"{base} full IPSL Present ({year0}) {stamp}.pdf", "application/pdf", build_ipsl_pdf_bytes(data)),  # full IPSL as PDF
     ]  # end of the Present files
     if data.get("future"):  # the future lists exist
         for k in FUTURE_REPORT_YEARS:  # Present+2 ... Present+25
-            files.append((f"{base} IPSL Present+{k} {stamp}.csv", "text/csv", build_future_csv_bytes(data, k)))  # future IPSL as CSV
-            files.append((f"{base} dot charts and Abridged IPSL Present+{k} {stamp}.pdf", "application/pdf", build_future_pdf_bytes(data, k)))  # future dot charts and Abridged IPSL
+            files.append((f"{base} IPSL Present+{k} ({year0 + k}) {stamp}.csv", "text/csv", build_future_csv_bytes(data, k)))  # future IPSL as CSV
+            files.append((f"{base} dot charts and Abridged IPSL Present+{k} ({year0 + k}) {stamp}.pdf", "application/pdf", build_future_pdf_bytes(data, k)))  # future dot charts and Abridged IPSL
     return files  # all files
 
 
@@ -1431,7 +1454,7 @@ def _make_future_list(IPSL, alive, hires, present_ids):  # the future list: surv
     return fut  # the future list
 
 
-def compute_position_lines(IPSL):  # per position (Equip + Rank): count-weighted minimum and bottom-10% percentile across the airlines
+def compute_position_lines(IPSL):  # per position (Equip + Rank): count-weighted 1st-percentile and bottom-20% levels across the airlines
     total = len(IPSL)  # pilots on today's IPSL
 
     def rel(v):  # seniority number -> relative seniority percentile (1 = 100, last = 0)
@@ -1441,15 +1464,15 @@ def compute_position_lines(IPSL):  # per position (Equip + Rank): count-weighted
     for (airline, rank, equip), g in IPSL.groupby(["Airline", "Rank", "Equip"]):  # each group
         sen = g["SenNum"].to_numpy()  # the group's seniority numbers
         parts.append({"Rank": rank, "Equip": equip, "n": len(g),  # position and head count
-                      "min": rel(float(sen.max())),  # lowest relative seniority held in the group (box-plot bottom)
-                      "b10": rel(float(np.percentile(sen, 90)))})  # bottom 10% of the group
+                      "p1": rel(float(np.percentile(sen, 99))),  # 1st percentile of relative seniority in the group (box-plot bottom whisker)
+                      "b20": rel(float(np.percentile(sen, 80)))})  # bottom 20% of the group
     df = pd.DataFrame(parts)  # as a table
     lines = []  # result
     for (equip, rank), g in df.groupby(["Equip", "Rank"]):  # combine the airlines for each position
         w = g["n"].astype(float)  # weights = pilots in the position at each airline
         lines.append({"Equip": equip, "Rank": rank, "n": int(w.sum()),  # label and size
-                      "min": float((g["min"] * w).sum() / w.sum()),  # weighted minimum percentile
-                      "b10": float((g["b10"] * w).sum() / w.sum())})  # weighted bottom-10% percentile
+                      "p1": float((g["p1"] * w).sum() / w.sum()),  # weighted 1st percentile
+                      "b20": float((g["b20"] * w).sum() / w.sum())})  # weighted bottom-20% percentile
     return sorted(lines, key=lambda d: (d["Rank"], d["Equip"]))  # CA, FO, RP; equipment alphabetical
 
 
@@ -1516,10 +1539,10 @@ def draw_personal(ax, data, idx):  # line graph of one pilot's relative seniorit
     labels = []  # (height, text, colour) for the labels at the right-hand edge
     for i, pl in enumerate(f["position_lines"]):  # each position
         col = cmap(i % 10)  # this position's colour
-        ax.axhline(pl["min"], color=col, linestyle=":", linewidth=1.3)  # dotted = minimum relative seniority in the position
-        ax.axhline(pl["b10"], color=col, linestyle="--", linewidth=1.0)  # dashed = bottom 10% of the position
-        labels.append((pl["min"], f"{pl['Equip']} {pl['Rank']} min {pl['min']:.1f}%", col))  # label for the dotted line
-        labels.append((pl["b10"], f"{pl['Equip']} {pl['Rank']} bottom 10% {pl['b10']:.1f}%", col))  # label for the dashed line
+        ax.axhline(pl["p1"], color=col, linestyle=":", linewidth=1.3)  # dotted = 1st percentile of the position
+        ax.axhline(pl["b20"], color=col, linestyle="--", linewidth=1.0)  # dashed = bottom 20% of the position
+        labels.append((pl["p1"], f"{pl['Equip']} {pl['Rank']} 1st pct {pl['p1']:.1f}%", col))  # label for the dotted line
+        labels.append((pl["b20"], f"{pl['Equip']} {pl['Rank']} bottom 20% {pl['b20']:.1f}%", col))  # label for the dashed line
     labels.sort(key=lambda t: t[0])  # lowest first
     gap = 2.6  # minimum spacing between labels (percentile points) so they do not overlap
     placed = []  # adjusted heights
@@ -1677,6 +1700,91 @@ def render_report_page(data):  # draws the whole report
     st.markdown(abridged_html(data), unsafe_allow_html=True)  # tinted, scrollable table
 
 
+SCROLL_STEPS = list(range(100, -1, -10))  # Longevity % of each solution: 100, 90, ... 0 (Status and Category is the rest)
+
+
+def scroll_label(longevity):  # "100% Longevity : 0% Status and Category"
+    return f"{longevity}% Longevity : {100 - longevity}% Status and Category"  # text for the slider and headings
+
+
+def _png_bytes(fig):  # a matplotlib figure as PNG bytes
+    buf = io.BytesIO()  # in-memory file
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")  # draw it
+    plt.close(fig)  # free memory
+    return buf.getvalue()  # the bytes
+
+
+def build_scroll_solutions(base, SenList1, SenList2, notice_date, exclude_inactive, category_counts):  # an IPSL for every Longevity / Status-and-Category weighting, drawn as three charts each
+    ConstNotice1, ConstNotice2, ConstNoticeList = Create_ConstNoticeList(SenList1, SenList2, notice_date)  # constructive-notice pilots
+    Long1, Long2, LongList = Create_LongList(SenList1, SenList2, ConstNotice1, ConstNotice2, exclude_inactive)  # longevity list (the same for every weighting)
+    Active1 = SenList1[~SenList1["NameID"].isin(ConstNotice1["NameID"])].reset_index(drop=True)  # airline 1 minus notice pilots
+    Active2 = SenList2[~SenList2["NameID"].isin(ConstNotice2["NameID"])].reset_index(drop=True)  # airline 2 minus notice pilots
+    cat_lists, CategoryList = Create_Category_List(Active1, Active2, category_counts)  # status-and-category list (the same for every weighting)
+    views = []  # one report-like dictionary per solution
+    for longevity in SCROLL_STEPS:  # 100% Longevity ... 0% Longevity
+        HybridList = Create_HybridList(LongList, CategoryList, longevity / 100, (100 - longevity) / 100)  # blend with this weighting
+        StovepipedList = Create_StovePipedList(HybridList, Active1, Active2)  # keep each airline's own order
+        IPSL = Create_IPSL(StovepipedList, ConstNoticeList, SenList1, SenList2)  # final list for this weighting
+        view = dict(base)  # copy of the common data
+        view["IPSL"] = IPSL  # this solution's list
+        views.append(view)  # keep it
+    doh = pd.concat([v["IPSL"]["DOHDiffMonths"] for v in views]).dropna()  # every DOH differential, all solutions
+    rel = pd.concat([v["IPSL"]["PostMergeRelSen"] - v["IPSL"]["PreMergeRelSen"] for v in views])  # every relative seniority difference, all solutions
+
+    def limits(series):  # same y-axis for every solution so the charts can be compared while scrolling
+        lo, hi = float(series.min()), float(series.max())  # extremes
+        pad = (hi - lo) * 0.06 or 1.0  # a little margin
+        return lo - pad, hi + pad  # axis limits
+
+    doh_lim, rel_lim = limits(doh), limits(rel)  # y-axis limits
+
+    def doh_chart(ax, data):  # DOH Differential with fixed axis
+        draw_doh_diff(ax, data)  # normal chart
+        ax.set_ylim(*doh_lim)  # same axis for every solution
+
+    def rel_chart(ax, data):  # Relative Seniority Difference with fixed axis
+        draw_relsen_diff(ax, data)  # normal chart
+        ax.set_ylim(*rel_lim)  # same axis for every solution
+
+    solutions = []  # result
+    for longevity, view in zip(SCROLL_STEPS, views):  # each solution
+        images = {  # the three charts as pictures (so scrolling is instant)
+            "dot": _png_bytes(_fig_for(draw_dot_chart_airline, view, dot_chart_figsize(view))),  # dot chart by airline (same as the Analyze page)
+            "doh": _png_bytes(_fig_for(doh_chart, view, (6, 3.8))),  # DOH Differential
+            "rel": _png_bytes(_fig_for(rel_chart, view, (6, 3.8))),  # Relative Seniority Difference
+        }  # end images
+        solutions.append({"longevity": longevity, "label": scroll_label(longevity), "images": images})  # keep it
+    return solutions  # all solutions
+
+
+def render_scroll_page(sc):  # Scroll Solutions page (opens in its own tab)
+    st.title(f"Scroll Solutions - {sc['title']}")  # title at the top
+    st.caption(f"Prepared on {sc['prepared_at']}  |  Use the scroll bar (or the arrows) at the bottom to move from 100% Longevity to 100% Status and Category in steps of 10%.")  # explanation
+    sols = sc["solutions"]  # the solutions, 100% Longevity first
+    shorts = [f"{s['longevity']}% : {100 - s['longevity']}%" for s in sols]  # short slider labels (Longevity : Status and Category)
+    if st.session_state.get("scroll_choice") not in shorts:  # first visit
+        st.session_state["scroll_choice"] = shorts[0]  # start at 100% Longevity
+    i = shorts.index(st.session_state["scroll_choice"])  # position of the current solution
+    sol = sols[i]  # the solution to show
+    st.markdown(f"<div style='font-size:1.6rem; font-weight:700; margin-bottom:0.5rem'>{sol['label']}</div>", unsafe_allow_html=True)  # big heading
+    c1, c2, c3 = st.columns([1, 1, 1])  # dot chart | DOH Differential | Relative Seniority Difference
+    c1.image(sol["images"]["dot"], width="stretch")  # dot chart by airline
+    c2.image(sol["images"]["doh"], width="stretch")  # DOH Differential
+    c3.image(sol["images"]["rel"], width="stretch")  # Relative Seniority Difference
+    st.divider()  # thin line
+
+    def step(delta):  # arrow buttons: move the scroll bar one solution
+        cur = shorts.index(st.session_state["scroll_choice"])  # where the bar is now
+        st.session_state["scroll_choice"] = shorts[max(0, min(len(shorts) - 1, cur + delta))]  # move it, staying within the ends
+
+    _l, c_prev, c_bar, c_next, _r = st.columns([3, 0.7, 4, 0.7, 3], vertical_alignment="center")  # centred: arrow | scroll bar | arrow
+    c_prev.button("\u25C0", key="scroll_prev", on_click=step, args=(-1,), disabled=(i == 0), width="stretch")  # left arrow
+    with c_bar:  # the scroll bar (small)
+        st.select_slider("Longevity : Status and Category", options=shorts, key="scroll_choice", label_visibility="collapsed")  # the scroll bar
+    c_next.button("\u25B6", key="scroll_next", on_click=step, args=(1,), disabled=(i == len(shorts) - 1), width="stretch")  # right arrow
+    st.markdown("<div style='text-align:center; font-size:0.85rem; color:#555'>Longevity % : Status and Category %</div>", unsafe_allow_html=True)  # what the numbers mean
+
+
 def render_future_page(data, k):  # dot charts and Abridged IPSL for Present+k (opens in its own tab)
     f = data["future"]  # all future calculations
     if k not in f["years"]:  # not one of the six display years
@@ -1696,14 +1804,11 @@ def render_future_page(data, k):  # dot charts and Abridged IPSL for Present+k (
     )  # end markdown
     dot_size = dot_chart_figsize(view)  # figure size for the dot charts
     left, right = st.columns(2)  # two dot charts side by side
-    with left:  # left column
-        fig = _fig_for(draw_dot_chart, view, dot_size)  # dot chart by rank and equipment
-        st.pyplot(fig)  # display it
-        plt.close(fig)  # free memory
-    with right:  # right column
-        fig = _fig_for(draw_dot_chart_airline, view, dot_size)  # dot chart by airline
-        st.pyplot(fig)  # display it
-        plt.close(fig)  # free memory
+    for col, fn in ((left, draw_dot_chart), (right, draw_dot_chart_airline)):  # each chart
+        with col:  # its column
+            fig = _fig_for(fn, view, dot_size)  # build the chart
+            st.pyplot(fig)  # display it
+            plt.close(fig)  # free memory
     st.subheader("Abridged IPSL")  # section heading
     st.markdown(abridged_html(view), unsafe_allow_html=True)  # tinted, scrollable table
 
@@ -1724,13 +1829,13 @@ def render_personal_page(data, pilot_text):  # Personalized Seniority Prediction
     )  # end markdown
     fig, ax = plt.subplots(figsize=(11, 5.8))  # wide figure (room for the line labels on the right)
     draw_personal(ax, data, idx)  # the graph
-    ax.set_title("Relative Seniority Percentile by Year  (dotted = position minimum, dashed = bottom 10% of position)", fontsize=9)  # title
+    ax.set_title("Relative Seniority Percentile by Year  (dotted = 1st percentile of position, dashed = bottom 20% of position)", fontsize=9)  # title
     fig.subplots_adjust(left=0.07, right=0.80, top=0.93, bottom=0.10)  # leave room for the labels
     st.pyplot(fig)  # display it
     plt.close(fig)  # free memory
     st.markdown(  # how to read it
         "The percentile is the pilot's place on each year's list, which includes the New Hire pilots added for retirements and growth. "  # explanation 1
-        "100% is the most senior pilot. The horizontal lines are the count-weighted position minimum and bottom-10% levels from today's list."  # explanation 2
+        "100% is the most senior pilot. The horizontal lines are the count-weighted 1st-percentile and bottom-20% levels of each position on today's list."  # explanation 2
     )  # end markdown
     st.dataframe(personal_summary_df(data, idx), hide_index=True)  # year-by-year values
 
@@ -1740,7 +1845,9 @@ if _query_report_id:  # this tab is a report tab
     if _query_report_id in REPORT_CACHE:  # the report is still held in memory
         _view = st.query_params.get("view", "report")  # which page: report | future | personal
         _data = REPORT_CACHE[_query_report_id]  # the stored results
-        if _view == "future":  # a future-year page
+        if _view == "scroll":  # the Scroll Solutions page
+            render_scroll_page(_data)  # draw it
+        elif _view == "future":  # a future-year page
             try:  # the year comes from the address
                 _k = int(st.query_params.get("year", "2"))  # years from now
             except ValueError:  # not a number
@@ -2184,9 +2291,9 @@ button_block, _ = st.columns([1, 1])  # left half
 with button_block:  # left half
     btn_left, btn_right = st.columns(2)  # two buttons side by side
     with btn_left:  # left button
-        analyze_clicked = st.button("ANALYZE", width="stretch")  # run the integration
+        analyze_clicked = st.button("ANALYZE", key="row_btn_analyze", width="stretch")  # run the integration (and build the Scroll Solutions)
     with btn_right:  # right button
-        export_clicked = st.button("EXPORT", width="stretch")  # export the results
+        export_clicked = st.button("EXPORT", key="row_btn_export", width="stretch")  # export the results
     pid_col, pid_info = st.columns([5, 1])  # Pilot ID box | (i) symbol
     with pid_col:  # box column
         pilot_id_text = st.text_input("Pilot ID", key="pilot_id_input", placeholder="e.g. SMIPAT853", max_chars=24)  # which pilot to predict
@@ -2224,6 +2331,7 @@ if analyze_clicked:  # the user pressed ANALYZE
             st.session_state["report_id"] = report_id  # remember the link
             st.session_state["report_data"] = report_data  # remember the data for EXPORT
             st.session_state.pop("export_files", None)  # forget any earlier export
+            st.session_state.pop("scroll_id", None)  # no Scroll Solutions without a merger
             st.success("Analysis complete.")  # tell the user
         except ValueError as exc:  # a check inside the analysis failed
             st.error(str(exc))  # show it
@@ -2294,6 +2402,15 @@ if analyze_clicked:  # the user pressed ANALYZE
                 st.session_state["report_id"] = report_id  # remember the link
                 st.session_state["report_data"] = report_data  # remember the data for EXPORT
                 st.session_state.pop("export_files", None)  # forget any earlier export
+                with st.spinner("Building the 11 Scroll Solutions (100% Longevity to 100% Status and Category)..."):  # show progress
+                    base = {  # the data the Scroll Solutions charts need besides the list itself
+                        "mode": "merger", "airlines": airlines,  # airlines with their colours
+                        "lists": [{"num": 1, "name": a1_label, "color": airline1_color}, {"num": 2, "name": a2_label, "color": airline2_color}],  # list names and colours
+                    }  # end base
+                    solutions = build_scroll_solutions(base, SenList1, SenList2, constructive_notice_date, exclude_inactive, category_counts)  # IPSL + three charts for each weighting
+                scroll_id = str(uuid.uuid4())  # unique id for the Scroll Solutions page
+                REPORT_CACHE[scroll_id] = {"title": f"{a1_label}-{a2_label}", "prepared_at": report_data["prepared_at"], "solutions": solutions}  # let the new tab fetch it
+                st.session_state["scroll_id"] = scroll_id  # remember the link
                 st.success("Analysis complete.")  # tell the user
             except ValueError as exc:  # a check inside the analysis failed
                 st.error(str(exc))  # show it
@@ -2319,6 +2436,12 @@ if st.session_state.get("report_id"):  # an analysis has been run
         f'style="font-size:1.05rem; font-weight:600;">Open the integration report in a new tab &#8599;</a>',  # link text
         unsafe_allow_html=True,  # allow the HTML
     )  # end markdown
+    if st.session_state.get("scroll_id"):  # Scroll Solutions were built with this analysis
+        st.markdown(  # link that opens the Scroll Solutions in a new tab
+            f'<a href="?report_id={st.session_state["scroll_id"]}&view=scroll" target="_blank" '  # address with the page id
+            f'style="font-size:1.05rem; font-weight:600;">Open Scroll Solutions in a new tab &#8599;</a>',  # link text
+            unsafe_allow_html=True,  # allow the HTML
+        )  # end markdown
     _P = _rd["future"]["present_year"]  # present year
     _links = " &nbsp;|&nbsp; ".join(  # one link per future year
         f'<a href="?report_id={_rid}&view=future&year={k}" target="_blank">Present+{k} ({_P + k}) &#8599;</a>' for k in FUTURE_REPORT_YEARS  # opens in its own tab
