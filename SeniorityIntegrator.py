@@ -879,13 +879,13 @@ def _add_dot_scale(ax, total, cols):  # small numbers beside a dot chart: pilots
     while k <= total:  # one label per 250 pilots (the row boundary after the k-th pilot)
         y = k / cols - 0.5  # row boundary
         ax.plot([-0.012, 0.0], [y, y], transform=left, color="#666666", linewidth=0.5, clip_on=False)  # tiny tick
-        ax.text(-0.016, y, str(k), transform=left, ha="right", va="center", fontsize=4.5, color="#444444", clip_on=False)  # pilot count
+        ax.text(-0.016, y, str(k), transform=left, ha="right", va="center", fontsize=5.5, color="#444444", clip_on=False)  # pilot count
         k += 250  # next label
     for p in range(100, -1, -5):  # relative seniority percentiles 100, 95, ... 0
         i = (total - 1) * (1 - p / 100.0)  # position of the pilot at that percentile (0 = most senior)
         y = (i + 0.5) / cols - 0.5  # his row position
         ax.plot([1.0, 1.012], [y, y], transform=left, color="#666666", linewidth=0.5, clip_on=False)  # tiny tick
-        ax.text(1.016, y, f"{p}%", transform=left, ha="left", va="center", fontsize=4.5, color="#444444", clip_on=False)  # percentile
+        ax.text(1.016, y, f"{p}%", transform=left, ha="left", va="center", fontsize=5.5, color="#444444", clip_on=False)  # percentile
 
 
 def _draw_median(ax, value, color, unit=""):  # dashed horizontal line at a median, with its value beside it
